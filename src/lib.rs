@@ -1,7 +1,7 @@
 //! # Bitfield Struct
 //!
 //! Procedural macro for bitfields that allows specifying bitfields as structs.
-//! As this library provides a procedural-macro it has no dependencies and works for `no-std`.
+//! As this library provides a procedural-macro it has no runtime dependencies and works for `no-std`.
 //!
 //! ## Example
 //!
