@@ -6,6 +6,7 @@ authors = ["Lars Wrenger <lars@wrenger.net>"]
 description = "Procedural macro for bitfields."
 keywords = ["bitfield", "bits", "bitfields", "proc-macro"]
 categories = ["data-structures", "no-std"]
+repository = "https://github.com/wrenger/bitfield-struct-rs.git"
 readme = "README.md"
 license = "MIT"
 
