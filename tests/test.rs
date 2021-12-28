@@ -21,6 +21,11 @@ struct PageTableEntry {
     negative: i16,
 }
 
+#[bitfield(u64)]
+struct Full {
+    data: u64,
+}
+
 #[test]
 fn basics() {
     let pte = PageTableEntry::new()
@@ -39,4 +44,7 @@ fn basics() {
     assert_eq!(pte.present(), true);
     pte.set_size(1);
     assert_eq!(pte.size(), 1);
+
+    let full = Full::new().with_data(u64::MAX);
+    assert_eq!(full.data(), u64::MAX);
 }

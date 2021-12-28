@@ -66,6 +66,7 @@
 //! ```
 
 use proc_macro as pc;
+use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 use syn::parse::{Parse, ParseStream};
@@ -139,25 +140,25 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result<TokenStream> {
     let ty = &f.ty;
 
-    let mut bits = type_bits(ty)?;
-    match attr_bits(&f.attrs)? {
+    let type_bits = type_bits(ty)?;
+    let bits = match attr_bits(&f.attrs)? {
         Some(b) => {
-            if b > bits {
+            if b > type_bits {
                 return Err(syn::Error::new_spanned(&f, "member type not large enough"));
             }
             if b == 0 {
                 return Err(syn::Error::new_spanned(&f, "bits may not be 0"));
             }
-            bits = b;
+            b
         }
-        _ => {}
-    }
+        _ => type_bits,
+    };
 
     let doc: TokenStream = f
         .attrs
         .iter()
         .filter(|a| a.path.is_ident("doc"))
-        .map(|a| a.to_token_stream())
+        .map(ToTokens::to_token_stream)
         .collect();
 
     let start = *offset;
@@ -178,6 +179,8 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
     let vis = &f.vis;
 
     if bits > 1 {
+        let mask: u128 = !0 >> (u128::BITS as usize - bits);
+        let mask = LitInt::new(&format!("0x{:x}", mask), Span::mixed_site());
         Ok(quote! {
             #doc
             #vis fn #with_name(mut self, value: #ty) -> Self {
@@ -190,8 +193,7 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
             }
             #doc
             #vis fn #set_name(&mut self, value: #ty) {
-                self.0 &= !(((1 << #bits) - 1) << #start);
-                self.0 |= (value as #pty & ((1 << #bits) - 1)) << #start;
+                self.0 = self.0 & !(#mask << #start) | (value as #pty & #mask) << #start;
             }
         })
     } else {
@@ -207,8 +209,7 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
             }
             #doc
             #vis fn #set_name(&mut self, value: #ty) {
-                self.0 &= !(1 << #start);
-                self.0 |= (value as #pty & 1) << #start;
+                self.0 = self.0 & !(1 << #start) | (value as #pty & 1) << #start;
             }
         })
     }
