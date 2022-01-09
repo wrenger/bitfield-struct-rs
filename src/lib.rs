@@ -45,7 +45,7 @@
 //!     // other members ...
 //! }
 //! impl From<u64> for PageTableEntry { /* ... */ }
-//! impl Into<u64> for PageTableEntry { /* ... */ }
+//! impl From<PageTableEntry> for u64 { /* ... */ }
 //! ```
 //!
 //! This generated bitfield then can be used as follows.

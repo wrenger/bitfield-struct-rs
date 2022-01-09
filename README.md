@@ -1,7 +1,19 @@
 # Bitfield Struct
 
+[![Crate](https://img.shields.io/crates/v/bitfield-struct.svg)](https://crates.io/crates/bitfield-struct)
+[![API](https://docs.rs/bitfield-struct/badge.svg)](https://docs.rs/bitfield-struct)
+
 Procedural macro for bitfields that allows specifying bitfields as structs.
 As this library provides a procedural-macro it has no runtime dependencies and works for `no-std`.
+
+## Usage
+
+Add this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+bitfield-struct = "0.1.2"
+```
 
 ## Example
 
@@ -45,7 +57,7 @@ impl PageTableEntry {
     // other members ...
 }
 impl From<u64> for PageTableEntry { /* ... */ }
-impl Into<u64> for PageTableEntry { /* ... */ }
+impl From<PageTableEntry> for u64 { /* ... */ }
 ```
 
 This generated bitfield then can be used as follows.
