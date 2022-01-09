@@ -129,9 +129,9 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
                 Self(v)
             }
         }
-        impl Into<#ty> for #name {
-            fn into(self) -> #ty {
-                self.0
+        impl From<#name> for #ty {
+            fn from(v: #name) -> #ty {
+                v.0
             }
         }
     })
@@ -140,19 +140,16 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result<TokenStream> {
     let ty = &f.ty;
 
-    let type_bits = type_bits(ty)?;
-    let bits = match attr_bits(&f.attrs)? {
-        Some(b) => {
-            if b > type_bits {
-                return Err(syn::Error::new_spanned(&f, "member type not large enough"));
-            }
-            if b == 0 {
-                return Err(syn::Error::new_spanned(&f, "bits may not be 0"));
-            }
-            b
+    let mut bits = type_bits(ty)?;
+    if let Some(b) = attr_bits(&f.attrs)? {
+        if b > bits {
+            return Err(syn::Error::new_spanned(&f, "member type not large enough"));
         }
-        _ => type_bits,
-    };
+        if b == 0 {
+            return Err(syn::Error::new_spanned(&f, "bits may not be 0"));
+        }
+        bits = b;
+    }
 
     let doc: TokenStream = f
         .attrs
