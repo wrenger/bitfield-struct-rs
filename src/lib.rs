@@ -117,7 +117,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         #vis struct #name(#ty);
 
         impl #name {
-            #vis fn new() -> Self {
+            #vis const fn new() -> Self {
                 Self(0)
             }
 
@@ -180,33 +180,31 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
         let mask = LitInt::new(&format!("0x{:x}", mask), Span::mixed_site());
         Ok(quote! {
             #doc
-            #vis fn #with_name(mut self, value: #ty) -> Self {
-                self.#set_name(value);
-                self
+            #vis const fn #with_name(mut self, value: #ty) -> Self {
+                Self(self.0 & !(#mask << #start) | (value as #pty & #mask) << #start)
             }
             #doc
-            #vis fn #name(&self) -> #ty {
+            #vis const fn #name(&self) -> #ty {
                 (((self.0 >> #start) as #ty) << #ty::BITS as usize - #bits) >> #ty::BITS as usize - #bits
             }
             #doc
             #vis fn #set_name(&mut self, value: #ty) {
-                self.0 = self.0 & !(#mask << #start) | (value as #pty & #mask) << #start;
+                *self = self.#with_name(value);
             }
         })
     } else {
         Ok(quote! {
             #doc
-            #vis fn #with_name(mut self, value: #ty) -> Self {
-                self.#set_name(value);
-                self
+            #vis const fn #with_name(mut self, value: #ty) -> Self {
+                Self(self.0 & !(1 << #start) | (value as #pty & 1) << #start)
             }
             #doc
-            #vis fn #name(&self) -> #ty {
+            #vis const fn #name(&self) -> #ty {
                 ((self.0 >> #start) & 1) != 0
             }
             #doc
             #vis fn #set_name(&mut self, value: #ty) {
-                self.0 = self.0 & !(1 << #start) | (value as #pty & 1) << #start;
+                *self = self.#with_name(value);
             }
         })
     }
