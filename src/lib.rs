@@ -36,10 +36,10 @@
 //! ```ignore
 //! struct PageTableEntry(u64);
 //! impl PageTableEntry {
-//!     fn new() -> Self { /* ... */ }
+//!     const fn new() -> Self { /* ... */ }
 //!
-//!     fn with_addr(self, value: u32) -> Self { /* ... */ }
-//!     fn addr(&self) -> u32 { /* ... */ }
+//!     const fn with_addr(self, value: u32) -> Self { /* ... */ }
+//!     const fn addr(&self) -> u32 { /* ... */ }
 //!     fn set_addr(&mut self, value: u32) { /* ... */ }
 //!
 //!     // other members ...

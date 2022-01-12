@@ -1,6 +1,6 @@
 [package]
 name = "bitfield-struct"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["Lars Wrenger <lars@wrenger.net>"]
 description = "Procedural macro for bitfields."
