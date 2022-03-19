@@ -88,6 +88,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let span = input.fields.span();
     let name = input.ident;
     let vis = input.vis;
+    let attrs: TokenStream = input.attrs.iter().map(ToTokens::to_token_stream).collect();
 
     let mut offset = 0;
     let mut members = TokenStream::new();
@@ -104,16 +105,17 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         return Err(syn::Error::new(
             span,
             format!(
-                "The bitfiled size has to be equal to the sum of its members! {} != {}. \
+                "The bitfiled size has to be equal to the sum of its members! {bits} != {offset}. \
                 Padding can be done by prefixing members with \"_\". \
-                For these members no accessor methods are generated.",
-                bits, offset
+                For these members no accessor methods are generated."
             ),
         ));
     }
 
     Ok(quote! {
+        #attrs
         #[derive(Copy, Clone)]
+        #[repr(transparent)]
         #vis struct #name(#ty);
 
         impl #name {
@@ -138,23 +140,22 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 }
 
 fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result<TokenStream> {
-    let ty = &f.ty;
+    let syn::Field {
+        ty,
+        vis,
+        ident,
+        attrs,
+        ..
+    } = &f;
 
     let mut bits = type_bits(ty)?;
-    if let Some(b) = attr_bits(&f.attrs)? {
-        if b > bits {
-            return Err(syn::Error::new_spanned(&f, "member type not large enough"));
-        }
-        if b == 0 {
-            return Err(syn::Error::new_spanned(&f, "bits may not be 0"));
-        }
+    if let Some(b) = attr_bits(attrs, bits)? {
         bits = b;
     }
 
-    let doc: TokenStream = f
-        .attrs
+    let doc: TokenStream = attrs
         .iter()
-        .filter(|a| a.path.is_ident("doc"))
+        .filter(|a| !a.path.is_ident("bits"))
         .map(ToTokens::to_token_stream)
         .collect();
 
@@ -162,7 +163,7 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
     *offset = start + bits;
 
     // Skip if unnamed
-    let name = if let Some(name) = &f.ident {
+    let name = if let Some(name) = ident {
         name
     } else {
         return Ok(TokenStream::new());
@@ -171,16 +172,15 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
         return Ok(TokenStream::new());
     }
 
-    let with_name = format_ident!("with_{}", name);
-    let set_name = format_ident!("set_{}", name);
-    let vis = &f.vis;
+    let with_name = format_ident!("with_{name}");
+    let set_name = format_ident!("set_{name}");
 
     if bits > 1 {
         let mask: u128 = !0 >> (u128::BITS as usize - bits);
-        let mask = LitInt::new(&format!("0x{:x}", mask), Span::mixed_site());
+        let mask = LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
         Ok(quote! {
             #doc
-            #vis const fn #with_name(mut self, value: #ty) -> Self {
+            #vis const fn #with_name(self, value: #ty) -> Self {
                 Self(self.0 & !(#mask << #start) | (value as #pty & #mask) << #start)
             }
             #doc
@@ -195,7 +195,7 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
     } else {
         Ok(quote! {
             #doc
-            #vis const fn #with_name(mut self, value: #ty) -> Self {
+            #vis const fn #with_name(self, value: #ty) -> Self {
                 Self(self.0 & !(1 << #start) | (value as #pty & 1) << #start)
             }
             #doc
@@ -210,7 +210,7 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
     }
 }
 
-fn attr_bits(attrs: &[Attribute]) -> syn::Result<Option<usize>> {
+fn attr_bits(attrs: &[Attribute], max: usize) -> syn::Result<Option<usize>> {
     fn malformed(mut e: syn::Error, attr: &Attribute) -> syn::Error {
         e.combine(syn::Error::new_spanned(attr, "malformed #[bits] attribute"));
         e
@@ -219,18 +219,23 @@ fn attr_bits(attrs: &[Attribute]) -> syn::Result<Option<usize>> {
     for attr in attrs {
         match attr {
             Attribute {
-                pound_token: _,
                 style: AttrStyle::Outer,
-                bracket_token: _,
                 path,
-                tokens: _,
+                tokens,
+                ..
             } if path.is_ident("bits") => {
-                return Ok(Some(
-                    attr.parse_args::<LitInt>()
-                        .map_err(|e| malformed(e, attr))?
-                        .base10_parse()
-                        .map_err(|e| malformed(e, attr))?,
-                ))
+                let bits = attr
+                    .parse_args::<LitInt>()
+                    .map_err(|e| malformed(e, attr))?
+                    .base10_parse()
+                    .map_err(|e| malformed(e, attr))?;
+                if bits == 0 {
+                    return Err(syn::Error::new_spanned(&tokens, "bits may not be 0"));
+                } else if bits > max {
+                    return Err(syn::Error::new_spanned(&tokens, "overflowing member type"));
+                } else {
+                    return Ok(Some(bits));
+                }
             }
             _ => {}
         }

@@ -1,5 +1,6 @@
 use bitfield_struct::bitfield;
 
+/// A test bitfield with documentation
 #[bitfield(u64)]
 struct PageTableEntry {
     /// defaults to 32 bits for u32
@@ -22,6 +23,7 @@ struct PageTableEntry {
 }
 
 #[bitfield(u64)]
+#[derive(PartialEq, Eq)]
 struct Full {
     data: u64,
 }
@@ -47,4 +49,5 @@ fn basics() {
 
     let full = Full::new().with_data(u64::MAX);
     assert_eq!(full.data(), u64::MAX);
+    assert!(full == Full::new().with_data(u64::MAX));
 }
