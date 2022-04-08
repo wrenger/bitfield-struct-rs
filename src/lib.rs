@@ -175,19 +175,24 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
     let with_name = format_ident!("with_{name}");
     let set_name = format_ident!("set_{name}");
 
+    let location = format!("\n\nBits: {start}..{offset}");
+
     if bits > 1 {
         let mask: u128 = !0 >> (u128::BITS as usize - bits);
         let mask = LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
         Ok(quote! {
             #doc
+            #[doc = #location]
             #vis const fn #with_name(self, value: #ty) -> Self {
                 Self(self.0 & !(#mask << #start) | (value as #pty & #mask) << #start)
             }
             #doc
+            #[doc = #location]
             #vis const fn #name(&self) -> #ty {
                 (((self.0 >> #start) as #ty) << #ty::BITS as usize - #bits) >> #ty::BITS as usize - #bits
             }
             #doc
+            #[doc = #location]
             #vis fn #set_name(&mut self, value: #ty) {
                 *self = self.#with_name(value);
             }
@@ -195,14 +200,17 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
     } else {
         Ok(quote! {
             #doc
+            #[doc = #location]
             #vis const fn #with_name(self, value: #ty) -> Self {
                 Self(self.0 & !(1 << #start) | (value as #pty & 1) << #start)
             }
             #doc
+            #[doc = #location]
             #vis const fn #name(&self) -> #ty {
                 ((self.0 >> #start) & 1) != 0
             }
             #doc
+            #[doc = #location]
             #vis fn #set_name(&mut self, value: #ty) {
                 *self = self.#with_name(value);
             }
