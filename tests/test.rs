@@ -11,8 +11,11 @@ struct PageTableEntry {
     pub size: usize,
 
     /// padding
-    #[bits(6)]
+    #[bits(5)]
     _p: u8,
+
+    #[bits(1)]
+    bug: u8,
 
     /// interpreted as 1 bit flag
     present: bool,

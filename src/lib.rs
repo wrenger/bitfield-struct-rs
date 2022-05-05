@@ -198,6 +198,13 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
             }
         })
     } else {
+        // Casting to a bool or a number is syntactically different...
+        let cast = if matches!(ty, Type::Path(p) if p.path.is_ident("bool")) {
+            quote! { != 0 }
+        } else {
+            quote! { as _ }
+        };
+
         Ok(quote! {
             #doc
             #[doc = #location]
@@ -207,7 +214,7 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
             #doc
             #[doc = #location]
             #vis const fn #name(&self) -> #ty {
-                ((self.0 >> #start) & 1) != 0
+                ((self.0 >> #start) & 1) #cast
             }
             #doc
             #[doc = #location]
