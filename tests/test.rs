@@ -23,10 +23,14 @@ struct PageTableEntry {
     /// sign extend for signed integers
     #[bits(13)]
     negative: i16,
+
+    /// Ignore this member completely
+    #[bits(0)]
+    _completely_ignored: String,
 }
 
 #[bitfield(u64)]
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Default)]
 struct Full {
     data: u64,
 }
@@ -38,8 +42,11 @@ fn basics() {
         .with_size(2)
         .with_present(false)
         .with_negative(-3);
+    println!("{pte:?}");
+
     let value: u64 = pte.into();
-    println!("{:b}", value);
+    println!("{value:b}");
+
     assert_eq!(pte.addr(), 3 << 31);
     assert_eq!(pte.size(), 2);
     assert_eq!(pte.present(), false);
@@ -53,4 +60,7 @@ fn basics() {
     let full = Full::new().with_data(u64::MAX);
     assert_eq!(full.data(), u64::MAX);
     assert!(full == Full::new().with_data(u64::MAX));
+
+    let full = Full::default();
+    assert!(full == Full::new());
 }

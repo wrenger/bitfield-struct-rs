@@ -5,8 +5,11 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```
+//! use bitfield_struct::bitfield;
+//!
 //! #[bitfield(u64)]
+//! #[derive(Default, PartialEq, Eq)] // Attributes are also applied
 //! struct PageTableEntry {
 //!     /// defaults to 32 bits for u32
 //!     addr: u32,
@@ -34,38 +37,57 @@
 //! The signatures for `addr` for example are:
 //!
 //! ```ignore
+//! // generated struct
 //! struct PageTableEntry(u64);
 //! impl PageTableEntry {
-//!     const fn new() -> Self { /* ... */ }
+//!     const fn new() -> Self { Self(0) }
 //!
 //!     const fn with_addr(self, value: u32) -> Self { /* ... */ }
 //!     const fn addr(&self) -> u32 { /* ... */ }
 //!     fn set_addr(&mut self, value: u32) { /* ... */ }
 //!
-//!     // other members ...
+//!     // other field ...
 //! }
+//! // generated trait implementations
 //! impl From<u64> for PageTableEntry { /* ... */ }
 //! impl From<PageTableEntry> for u64 { /* ... */ }
+//! impl Debug for PageTableEntry { /* ... */ }
 //! ```
 //!
 //! This generated bitfield then can be used as follows.
 //!
-//! ```ignore
-//! let pte = PageTableEntry::new()
+//! ```
+//! # use bitfield_struct::bitfield;
+//! #
+//! # #[bitfield(u64)]
+//! # struct PageTableEntry {
+//! #     addr: u32,
+//! #     #[bits(12)]
+//! #     pub size: usize,
+//! #     #[bits(6)]
+//! #     _p: u8,
+//! #     present: bool,
+//! #     #[bits(13)]
+//! #     negative: i16,
+//! # }
+//!
+//! let mut pte = PageTableEntry::new()
 //!     .with_addr(3 << 31)
 //!     .with_size(2)
 //!     .with_present(false)
 //!     .with_negative(-3);
 //!
-//! println!("{}", pte.addr());
+//! println!("{pte:?}");
+//! assert!(pte.addr() == 3 << 31);
 //!
 //! pte.set_size(1);
 //!
 //! let value: u64 = pte.into();
-//! println!("{:b}", value);
+//! println!("{value:b}");
 //! ```
 
 use proc_macro as pc;
+use proc_macro2::Ident;
 use proc_macro2::Span;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens};
@@ -87,15 +109,21 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
     let span = input.fields.span();
     let name = input.ident;
+    let name_str = name.to_string();
     let vis = input.vis;
     let attrs: TokenStream = input.attrs.iter().map(ToTokens::to_token_stream).collect();
 
     let mut offset = 0;
     let mut members = TokenStream::new();
+    let mut debug_fields = TokenStream::new();
     match input.fields {
         syn::Fields::Named(fields) => {
             for field in fields.named {
-                members.extend(bitfield_member(field, &ty, &mut offset)?);
+                if let Some((name, tokens)) = bitfield_member(field, &ty, &mut offset)? {
+                    members.extend(tokens);
+                    let name_str = name.to_string();
+                    debug_fields.extend(quote!(.field(#name_str, &self.#name())));
+                }
             }
         }
         _ => return Err(syn::Error::new(span, "only named fields are supported")),
@@ -136,10 +164,21 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
                 v.0
             }
         }
+        impl core::fmt::Debug for #name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.debug_struct(#name_str)
+                    #debug_fields
+                    .finish()
+            }
+        }
     })
 }
 
-fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result<TokenStream> {
+fn bitfield_member(
+    f: syn::Field,
+    pty: &Type,
+    offset: &mut usize,
+) -> syn::Result<Option<(Ident, TokenStream)>> {
     let syn::Field {
         ty,
         vis,
@@ -148,10 +187,26 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
         ..
     } = &f;
 
-    let mut bits = type_bits(ty)?;
-    if let Some(b) = attr_bits(attrs, bits)? {
-        bits = b;
+    let bits = bits(attrs, ty)?;
+    if bits == 0 {
+        // Skip zero sized types
+        return Ok(None);
     }
+
+    let start = *offset;
+    *offset = start + bits;
+
+    let Some(name) = ident
+        .as_ref()
+        .and_then(|name| (!name.to_string().starts_with('_')).then_some(name)) else {
+        // Skip if unnamed
+        return Ok(None);
+    };
+
+    let with_name = format_ident!("with_{name}");
+    let set_name = format_ident!("set_{name}");
+
+    let location = format!("\n\nBits: {start}..{offset}");
 
     let doc: TokenStream = attrs
         .iter()
@@ -159,44 +214,31 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
         .map(ToTokens::to_token_stream)
         .collect();
 
-    let start = *offset;
-    *offset = start + bits;
-
-    // Skip if unnamed
-    let name = if let Some(name) = ident {
-        name
-    } else {
-        return Ok(TokenStream::new());
-    };
-    if name.to_string().starts_with('_') {
-        return Ok(TokenStream::new());
-    }
-
-    let with_name = format_ident!("with_{name}");
-    let set_name = format_ident!("set_{name}");
-
-    let location = format!("\n\nBits: {start}..{offset}");
-
     if bits > 1 {
         let mask: u128 = !0 >> (u128::BITS as usize - bits);
         let mask = LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
-        Ok(quote! {
-            #doc
-            #[doc = #location]
-            #vis const fn #with_name(self, value: #ty) -> Self {
-                Self(self.0 & !(#mask << #start) | (value as #pty & #mask) << #start)
-            }
-            #doc
-            #[doc = #location]
-            #vis const fn #name(&self) -> #ty {
-                (((self.0 >> #start) as #ty) << #ty::BITS as usize - #bits) >> #ty::BITS as usize - #bits
-            }
-            #doc
-            #[doc = #location]
-            #vis fn #set_name(&mut self, value: #ty) {
-                *self = self.#with_name(value);
-            }
-        })
+        Ok(Some((
+            name.clone(),
+            quote! {
+                #doc
+                #[doc = #location]
+                #vis const fn #with_name(self, value: #ty) -> Self {
+                    debug_assert!(value <= #mask);
+                    Self(self.0 & !(#mask << #start) | (value as #pty & #mask) << #start)
+                }
+                #doc
+                #[doc = #location]
+                #vis const fn #name(&self) -> #ty {
+                    (((self.0 >> #start) as #ty) << #ty::BITS as usize - #bits) >> #ty::BITS as usize - #bits
+                }
+                #doc
+                #[doc = #location]
+                #vis fn #set_name(&mut self, value: #ty) {
+                    debug_assert!(value <= #mask);
+                    *self = self.#with_name(value);
+                }
+            },
+        )))
     } else {
         // Casting to a bool or a number is syntactically different...
         let cast = if matches!(ty, Type::Path(p) if p.path.is_ident("bool")) {
@@ -205,27 +247,31 @@ fn bitfield_member(f: syn::Field, pty: &Type, offset: &mut usize) -> syn::Result
             quote! { as _ }
         };
 
-        Ok(quote! {
-            #doc
-            #[doc = #location]
-            #vis const fn #with_name(self, value: #ty) -> Self {
-                Self(self.0 & !(1 << #start) | (value as #pty & 1) << #start)
-            }
-            #doc
-            #[doc = #location]
-            #vis const fn #name(&self) -> #ty {
-                ((self.0 >> #start) & 1) #cast
-            }
-            #doc
-            #[doc = #location]
-            #vis fn #set_name(&mut self, value: #ty) {
-                *self = self.#with_name(value);
-            }
-        })
+        Ok(Some((
+            name.clone(),
+            quote! {
+                #doc
+                #[doc = #location]
+                #vis const fn #with_name(self, value: #ty) -> Self {
+                    Self(self.0 & !(1 << #start) | (value as #pty & 1) << #start)
+                }
+                #doc
+                #[doc = #location]
+                #vis const fn #name(&self) -> #ty {
+                    ((self.0 >> #start) & 1) #cast
+                }
+                #doc
+                #[doc = #location]
+                #vis fn #set_name(&mut self, value: #ty) {
+                    *self = self.#with_name(value);
+                }
+            },
+        )))
     }
 }
 
-fn attr_bits(attrs: &[Attribute], max: usize) -> syn::Result<Option<usize>> {
+/// Parses the `bits` attribute that allows specifying a custom number of bits.
+fn bits(attrs: &[Attribute], ty: &Type) -> syn::Result<usize> {
     fn malformed(mut e: syn::Error, attr: &Attribute) -> syn::Error {
         e.combine(syn::Error::new_spanned(attr, "malformed #[bits] attribute"));
         e
@@ -244,20 +290,22 @@ fn attr_bits(attrs: &[Attribute], max: usize) -> syn::Result<Option<usize>> {
                     .map_err(|e| malformed(e, attr))?
                     .base10_parse()
                     .map_err(|e| malformed(e, attr))?;
-                if bits == 0 {
-                    return Err(syn::Error::new_spanned(&tokens, "bits may not be 0"));
-                } else if bits > max {
-                    return Err(syn::Error::new_spanned(&tokens, "overflowing member type"));
+                return if bits == 0 {
+                    Ok(0)
+                } else if bits <= type_bits(ty)? {
+                    Ok(bits)
                 } else {
-                    return Ok(Some(bits));
-                }
+                    Err(syn::Error::new_spanned(&tokens, "overflowing member type"))
+                };
             }
             _ => {}
         }
     }
-    Ok(None)
+    // Fallback to type size
+    type_bits(ty)
 }
 
+/// Returns the number of bits for a given type
 fn type_bits(ty: &Type) -> syn::Result<usize> {
     match ty {
         Type::Path(path) if path.path.is_ident("bool") => Ok(1),

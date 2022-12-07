@@ -4,7 +4,7 @@
 [![API](https://docs.rs/bitfield-struct/badge.svg)](https://docs.rs/bitfield-struct)
 
 Procedural macro for bitfields that allows specifying bitfields as structs.
-As this library provides a procedural-macro it has no runtime dependencies and works for `no-std`.
+As this library provides a procedural macro, it has no runtime dependencies and works for `no-std`.
 
 ## Usage
 
@@ -43,9 +43,10 @@ struct PageTableEntry {
 The macro generates three accessor functions for each field.
 Each accessor also inherits the documentation of its field.
 
-The signatures for `addr` for example are:
+The signatures for `addr`, for example, are:
 
 ```rust
+// generated struct
 struct PageTableEntry(u64);
 impl PageTableEntry {
     const fn new() -> Self { /* ... */ }
@@ -54,25 +55,28 @@ impl PageTableEntry {
     const fn addr(&self) -> u32 { /* ... */ }
     fn set_addr(&mut self, value: u32) { /* ... */ }
 
-    // other members ...
+    // other fields ...
 }
+// generated trait implementations
 impl From<u64> for PageTableEntry { /* ... */ }
 impl From<PageTableEntry> for u64 { /* ... */ }
+impl Debug for PageTableEntry { /* ... */ }
 ```
 
-This generated bitfield then can be used as follows.
+This generated bitfield can then be used as follows.
 
 ```rust
-let pte = PageTableEntry::new()
+let mut pte = PageTableEntry::new()
     .with_addr(3 << 31)
     .with_size(2)
     .with_present(false)
     .with_negative(-3);
 
-println!("{}", pte.addr());
+println!("{pte:?}");
+assert!(pte.addr() == 3 << 31);
 
 pte.set_size(1);
 
 let value: u64 = pte.into();
-println!("{:b}", value);
+println!("{value:b}");
 ```
