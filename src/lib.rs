@@ -91,7 +91,23 @@
 //! This macro automatically creates a suitable `fmt::Debug` implementation
 //! similar to the ones that are created for normal structs by `#[derive(Debug)]`.
 //! If you want to opt-out from this, use you can disable it
-//! by setting the extra debug argument `#[bitfield(u64, debug = false)]`.
+//! by setting the extra debug argument.
+//!
+//! ```
+//! # use std::fmt;
+//! # use bitfield_struct::bitfield;
+//!
+//! #[bitfield(u64, debug = false)]
+//! struct CustomDebug {
+//!     data: u64
+//! }
+//!
+//! impl fmt::Debug for CustomDebug {
+//!     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//!         write!(f, "0x{:x}", self.data())
+//!     }
+//! }
+//! ```
 //!
 
 use proc_macro as pc;
