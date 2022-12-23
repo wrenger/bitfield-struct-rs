@@ -34,13 +34,16 @@
 //! The macro generates three accessor functions for each field.
 //! Each accessor also inherits the documentation of its field.
 //!
-//! The signatures for `addr` for example are:
+//! The signatures for `addr` are:
 //!
 //! ```ignore
 //! // generated struct
 //! struct PageTableEntry(u64);
 //! impl PageTableEntry {
 //!     const fn new() -> Self { Self(0) }
+//!
+//!     const ADDR_BITS: usize = 32;
+//!     const ADDR_OFFSET: usize = 0;
 //!
 //!     const fn with_addr(self, value: u32) -> Self { /* ... */ }
 //!     const fn addr(&self) -> u32 { /* ... */ }
@@ -54,7 +57,7 @@
 //! impl Debug for PageTableEntry { /* ... */ }
 //! ```
 //!
-//! This generated bitfield then can be used as follows.
+//! This generated bitfield can then be used as follows.
 //!
 //! ```
 //! # use bitfield_struct::bitfield;
@@ -89,9 +92,8 @@
 //! ## `fmt::Debug`
 //!
 //! This macro automatically creates a suitable `fmt::Debug` implementation
-//! similar to the ones that are created for normal structs by `#[derive(Debug)]`.
-//! If you want to opt-out from this, use you can disable it
-//! by setting the extra debug argument.
+//! similar to the ones created for normal structs by `#[derive(Debug)]`.
+//! You can disable it with the extra debug argument.
 //!
 //! ```
 //! # use std::fmt;
@@ -134,10 +136,8 @@ pub fn bitfield(args: pc::TokenStream, input: pc::TokenStream) -> pc::TokenStrea
 
 fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     let input = syn::parse2::<syn::ItemStruct>(input)?;
-    let Params { ty, bits, debug } = syn::parse2::<Params>(args).map_err(|mut e| {
-        e.combine(unsupported_arg(input.span()));
-        e
-    })?;
+    let Params { ty, bits, debug } =
+        syn::parse2::<Params>(args).map_err(|e| unsupported_param(e, input.span()))?;
 
     let span = input.fields.span();
     let name = input.ident;
@@ -145,29 +145,28 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let vis = input.vis;
     let attrs: TokenStream = input.attrs.iter().map(ToTokens::to_token_stream).collect();
 
+    let syn::Fields::Named(fields) = input.fields else {
+        return Err(syn::Error::new(span, "only named fields are supported"));
+    };
+
     let mut offset = 0;
     let mut members = TokenStream::new();
     let mut debug_fields = TokenStream::new();
-    match input.fields {
-        syn::Fields::Named(fields) => {
-            for field in fields.named {
-                if let Some((name, tokens)) = bitfield_member(field, &ty, &mut offset)? {
-                    members.extend(tokens);
-                    let name_str = name.to_string();
-                    debug_fields.extend(quote!(.field(#name_str, &self.#name())));
-                }
-            }
+
+    for field in fields.named {
+        if let Some((name, tokens)) = bitfield_member(field, &ty, &mut offset)? {
+            members.extend(tokens);
+            let name_str = name.to_string();
+            debug_fields.extend(quote!(.field(#name_str, &self.#name())));
         }
-        _ => return Err(syn::Error::new(span, "only named fields are supported")),
-    };
+    }
 
     if offset != bits {
         return Err(syn::Error::new(
             span,
             format!(
                 "The bitfiled size has to be equal to the sum of its members! {bits} != {offset}. \
-                Padding can be done by prefixing members with \"_\". \
-                For these members no accessor methods are generated."
+                Padding can be done by prefixing members with \"_\" which are ignored."
             ),
         ));
     }
@@ -217,7 +216,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
 fn bitfield_member(
     f: syn::Field,
-    pty: &Type,
+    base_ty: &Type,
     offset: &mut usize,
 ) -> syn::Result<Option<(Ident, TokenStream)>> {
     let syn::Field {
@@ -260,6 +259,7 @@ fn bitfield_member(
     if bits > 1 {
         let mask: u128 = !0 >> (u128::BITS as usize - bits);
         let mask = LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
+
         Ok(Some((
             name.clone(),
             quote! {
@@ -270,7 +270,7 @@ fn bitfield_member(
                 #[doc = #location]
                 #vis const fn #with_name(self, value: #ty) -> Self {
                     debug_assert!(value <= #mask);
-                    Self(self.0 & !(#mask << #start) | (value as #pty & #mask) << #start)
+                    Self(self.0 & !(#mask << #start) | (value as #base_ty & #mask) << #start)
                 }
                 #doc
                 #[doc = #location]
@@ -302,7 +302,7 @@ fn bitfield_member(
                 #doc
                 #[doc = #location]
                 #vis const fn #with_name(self, value: #ty) -> Self {
-                    Self(self.0 & !(1 << #start) | (value as #pty & 1) << #start)
+                    Self(self.0 & !(1 << #start) | (value as #base_ty & 1) << #start)
                 }
                 #doc
                 #[doc = #location]
@@ -339,6 +339,7 @@ fn bits(attrs: &[Attribute], ty: &Type) -> syn::Result<usize> {
                     .map_err(|e| malformed(e, attr))?
                     .base10_parse()
                     .map_err(|e| malformed(e, attr))?;
+
                 return if bits == 0 {
                     Ok(0)
                 } else if bits <= type_bits(ty)? {
@@ -350,6 +351,7 @@ fn bits(attrs: &[Attribute], ty: &Type) -> syn::Result<usize> {
             _ => {}
         }
     }
+
     // Fallback to type size
     type_bits(ty)
 }
@@ -406,11 +408,15 @@ impl Parse for Params {
     }
 }
 
-fn unsupported_arg<T>(arg: T) -> syn::Error
+fn unsupported_param<T>(mut e: syn::Error, arg: T) -> syn::Error
 where
     T: syn::spanned::Spanned,
 {
-    syn::Error::new(arg.span(), "unsupported #[bitfield] argument")
+    e.combine(syn::Error::new(
+        arg.span(),
+        "unsupported #[bitfield] argument",
+    ));
+    e
 }
 
 #[cfg(test)]
