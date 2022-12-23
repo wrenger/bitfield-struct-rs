@@ -1,3 +1,5 @@
+use std::fmt;
+
 use bitfield_struct::bitfield;
 
 /// A test bitfield with documentation
@@ -29,10 +31,17 @@ struct PageTableEntry {
     _completely_ignored: String,
 }
 
-#[bitfield(u64)]
+/// We have a custom debug implementation -> opt out
+#[bitfield(u64, debug = false)]
 #[derive(PartialEq, Eq, Default)]
 struct Full {
     data: u64,
+}
+
+impl fmt::Debug for Full {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "0x{:x}", self.data())
+    }
 }
 
 #[test]
@@ -52,6 +61,10 @@ fn basics() {
     assert_eq!(pte.present(), false);
     assert_eq!(pte.negative(), -3);
 
+    // Static members
+    assert_eq!(PageTableEntry::PRESENT_BITS, 1);
+    assert_eq!(PageTableEntry::PRESENT_OFFSET, 50);
+
     let mut pte = pte.with_present(true);
     assert_eq!(pte.present(), true);
     pte.set_size(1);
@@ -63,4 +76,5 @@ fn basics() {
 
     let full = Full::default();
     assert!(full == Full::new());
+    println!("{full:?}");
 }

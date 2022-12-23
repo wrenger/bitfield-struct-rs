@@ -85,16 +85,29 @@
 //! let value: u64 = pte.into();
 //! println!("{value:b}");
 //! ```
+//!
+//! ## `fmt::Debug`
+//!
+//! This macro automatically creates a suitable `fmt::Debug` implementation
+//! similar to the ones that are created for normal structs by `#[derive(Debug)]`.
+//! If you want to opt-out from this, use you can disable it
+//! by setting the extra debug argument `#[bitfield(u64, debug = false)]`.
+//!
 
 use proc_macro as pc;
-use proc_macro2::Ident;
-use proc_macro2::Span;
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote, ToTokens};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{AttrStyle, Attribute, LitInt, Type};
+use syn::{AttrStyle, Attribute, LitBool, LitInt, Token, Type};
 
+/// Creates a bitfield for this struct.
+///
+/// The arguments first, have to begin with the underlying type of the bitfield:
+/// For example: `#[bitfield(u64)]`.
+///
+/// Then optionally can contain an extra debug argument, for disabling the automatic Debug trait generation.
+/// Like: `#[bitfield(u64, debug = false)]`
 #[proc_macro_attribute]
 pub fn bitfield(args: pc::TokenStream, input: pc::TokenStream) -> pc::TokenStream {
     match bitfield_inner(args.into(), input.into()) {
@@ -105,7 +118,10 @@ pub fn bitfield(args: pc::TokenStream, input: pc::TokenStream) -> pc::TokenStrea
 
 fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     let input = syn::parse2::<syn::ItemStruct>(input)?;
-    let Params { ty, bits } = syn::parse2::<Params>(args)?;
+    let Params { ty, bits, debug } = syn::parse2::<Params>(args).map_err(|mut e| {
+        e.combine(unsupported_arg(input.span()));
+        e
+    })?;
 
     let span = input.fields.span();
     let name = input.ident;
@@ -140,6 +156,20 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         ));
     }
 
+    let debug_impl = if debug {
+        quote! {
+            impl core::fmt::Debug for #name {
+                fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                    f.debug_struct(#name_str)
+                        #debug_fields
+                        .finish()
+                }
+            }
+        }
+    } else {
+        Default::default()
+    };
+
     Ok(quote! {
         #attrs
         #[derive(Copy, Clone)]
@@ -164,13 +194,8 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
                 v.0
             }
         }
-        impl core::fmt::Debug for #name {
-            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                f.debug_struct(#name_str)
-                    #debug_fields
-                    .finish()
-            }
-        }
+
+        #debug_impl
     })
 }
 
@@ -205,6 +230,8 @@ fn bitfield_member(
 
     let with_name = format_ident!("with_{name}");
     let set_name = format_ident!("set_{name}");
+    let bits_name = format_ident!("{}_BITS", name.to_string().to_uppercase());
+    let offset_name = format_ident!("{}_OFFSET", name.to_string().to_uppercase());
 
     let location = format!("\n\nBits: {start}..{offset}");
 
@@ -220,6 +247,9 @@ fn bitfield_member(
         Ok(Some((
             name.clone(),
             quote! {
+                const #bits_name: usize = #bits;
+                const #offset_name: usize = #start;
+
                 #doc
                 #[doc = #location]
                 #vis const fn #with_name(self, value: #ty) -> Self {
@@ -250,6 +280,9 @@ fn bitfield_member(
         Ok(Some((
             name.clone(),
             quote! {
+                const #bits_name: usize = #bits;
+                const #offset_name: usize = #start;
+
                 #doc
                 #[doc = #location]
                 #vis const fn #with_name(self, value: #ty) -> Self {
@@ -328,21 +361,32 @@ fn type_bits(ty: &Type) -> syn::Result<usize> {
 struct Params {
     ty: Type,
     bits: usize,
+    debug: bool,
 }
 
 impl Parse for Params {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        if let Ok(ty) = Type::parse(input) {
-            Ok(Params {
-                bits: type_bits(&ty).map_err(|mut e| {
-                    e.combine(unsupported_arg(input.span()));
-                    e
-                })?,
-                ty,
-            })
+        let Ok(ty) = Type::parse(input) else {
+            return Err(syn::Error::new(input.span(), "unknown type"));
+        };
+        let bits = type_bits(&ty)?;
+
+        // try parse additional debug arg
+        let debug = if <Token![,]>::parse(input).is_ok() {
+            let ident = Ident::parse(input)?;
+
+            if ident != "debug" {
+                return Err(syn::Error::new(ident.span(), "unknown argument"));
+            }
+            <Token![=]>::parse(input)?;
+
+            let val = LitBool::parse(input)?;
+            val.value
         } else {
-            Err(unsupported_arg(input.span()))
-        }
+            true
+        };
+
+        Ok(Params { bits, ty, debug })
     }
 }
 
@@ -351,4 +395,26 @@ where
     T: syn::spanned::Spanned,
 {
     syn::Error::new(arg.span(), "unsupported #[bitfield] argument")
+}
+
+#[cfg(test)]
+mod test {
+    use quote::quote;
+
+    use crate::Params;
+
+    #[test]
+    fn parse_args() {
+        let args = quote! {
+            usize
+        };
+        let params = syn::parse2::<Params>(args).unwrap();
+        assert!(params.bits == usize::BITS as usize && params.debug == true);
+
+        let args = quote! {
+            u32, debug = false
+        };
+        let params = syn::parse2::<Params>(args).unwrap();
+        assert!(params.bits == u32::BITS as usize && params.debug == false);
+    }
 }
