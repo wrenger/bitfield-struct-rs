@@ -6,8 +6,7 @@
 //! ## Example
 //!
 //! ```
-//! use bitfield_struct::bitfield;
-//!
+//! # use bitfield_struct::bitfield;
 //! /// A test bitfield with documentation
 //! #[bitfield(u64)]
 //! #[derive(PartialEq, Eq)] // <- Attributes after `bitfield` are carried over

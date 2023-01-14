@@ -18,7 +18,6 @@ bitfield-struct = "0.3"
 ## Example
 
 ```rust
-use bitfield_struct::bitfield;
 /// A test bitfield with documentation
 #[bitfield(u64)]
 #[derive(PartialEq, Eq)] // <- Attributes after `bitfield` are carried over
