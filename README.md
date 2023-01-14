@@ -85,7 +85,7 @@ assert_eq!(val.negative(), 1);
 
 The macro generates three accessor functions for each field.
 Each accessor also inherits the documentation of its field.
-The signatures for `addr` are:
+The signatures for `int` are:
 
 ```rust
 // generated struct
