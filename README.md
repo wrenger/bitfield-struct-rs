@@ -12,79 +12,101 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-bitfield-struct = "0.2"
+bitfield-struct = "0.3"
 ```
 
 ## Example
 
 ```rs
 use bitfield_struct::bitfield;
-
+/// A test bitfield with documentation
 #[bitfield(u64)]
-#[derive(Default, PartialEq, Eq)] // Attributes are also applied
-struct PageTableEntry {
-    /// defaults to 32 bits for u32
-    addr: u32,
-
-    /// public field -> public accessor functions
-    #[bits(12)]
-    pub size: usize,
-
-    /// padding: No accessor functions are generated for fields beginning with `_`.
-    #[bits(6)]
-    _p: u8,
-
+#[derive(PartialEq, Eq)] // <- Attributes after `bitfield` are applied carried over
+struct MyBitfield {
+    /// defaults to 16 bits for u16
+    int: u16,
     /// interpreted as 1 bit flag
-    present: bool,
-
+    flag: bool,
+    /// custom bit size
+    #[bits(1)]
+    tiny: u8,
     /// sign extend for signed integers
     #[bits(13)]
     negative: i16,
+    /// Supports any type that implements `From<u64>` and `Into<u64>`
+    #[bits(16)]
+    custom: CustomEnum,
+    /// public field -> public accessor functions
+    #[bits(12)]
+    pub public: usize,
+    /// padding
+    #[bits(5)]
+    _p: u8,
+    /// zero-sized members are ignored
+    #[bits(0)]
+    _completely_ignored: String,
 }
+/// A custom enum
+#[derive(Debug, PartialEq, Eq)]
+#[repr(u64)]
+enum CustomEnum {
+    A = 0,
+    B = 1,
+    C = 2,
+}
+// implement `From<u64>` and `Into<u64>` for `CustomEnum`!
+
+// Usage:
+let mut val = MyBitfield::new()
+    .with_int(3 << 15)
+    .with_flag(true)
+    .with_tiny(1)
+    .with_negative(-3)
+    .with_custom(CustomEnum::B)
+    .with_public(2);
+
+println!("{val:?}");
+let raw: u64 = val.into();
+println!("{raw:b}");
+
+assert_eq!(val.int(), 3 << 15);
+assert_eq!(val.flag(), true);
+assert_eq!(val.negative(), -3);
+assert_eq!(val.tiny(), 1);
+assert_eq!(val.custom(), CustomEnum::B);
+assert_eq!(val.public(), 2);
+
+// const members
+assert_eq!(MyBitfield::FLAG_BITS, 1);
+assert_eq!(MyBitfield::FLAG_OFFSET, 16);
+
+val.set_negative(1);
+assert_eq!(val.negative(), 1);
 ```
 
 The macro generates three accessor functions for each field.
 Each accessor also inherits the documentation of its field.
-
 The signatures for `addr` are:
 
 ```rs
 // generated struct
-struct PageTableEntry(u64);
-impl PageTableEntry {
+struct MyBitfield(u64);
+impl MyBitfield {
     const fn new() -> Self { Self(0) }
 
-    const ADDR_BITS: usize = 32;
-    const ADDR_OFFSET: usize = 0;
+    const INT_BITS: usize = 32;
+    const INT_OFFSET: usize = 0;
 
-    const fn with_addr(self, value: u32) -> Self { /* ... */ }
-    const fn addr(&self) -> u32 { /* ... */ }
-    fn set_addr(&mut self, value: u32) { /* ... */ }
+    const fn with_int(self, value: u32) -> Self { /* ... */ }
+    const fn int(&self) -> u32 { /* ... */ }
+    fn set_int(&mut self, value: u32) { /* ... */ }
 
     // other field ...
 }
 // generated trait implementations
-impl From<u64> for PageTableEntry { /* ... */ }
-impl From<PageTableEntry> for u64 { /* ... */ }
-impl Debug for PageTableEntry { /* ... */ }
-```
-
-This generated bitfield can then be used as follows.
-
-```rs
-let mut pte = PageTableEntry::new()
-    .with_addr(3 << 31)
-    .with_size(2)
-    .with_present(false)
-    .with_negative(-3);
-
-println!("{pte:?}");
-assert!(pte.addr() == 3 << 31);
-
-pte.set_size(1);
-
-let value: u64 = pte.into();
-println!("{value:b}");
+impl From<u64> for MyBitfield { /* ... */ }
+impl From<MyBitfield> for u64 { /* ... */ }
+impl Debug for MyBitfield { /* ... */ }
 ```
 
 ## `fmt::Debug`
@@ -98,10 +120,12 @@ You can disable it with the extra debug argument.
 struct CustomDebug {
     data: u64
 }
-
 impl fmt::Debug for CustomDebug {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "0x{:x}", self.data())
     }
 }
+
+let val = CustomDebug::new().with_data(123);
+println!("{val:?}")
 ```

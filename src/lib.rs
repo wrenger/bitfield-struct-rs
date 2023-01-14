@@ -8,27 +8,84 @@
 //! ```
 //! use bitfield_struct::bitfield;
 //!
+//! /// A test bitfield with documentation
 //! #[bitfield(u64)]
-//! #[derive(Default, PartialEq, Eq)] // Attributes are also applied
-//! struct PageTableEntry {
-//!     /// defaults to 32 bits for u32
-//!     addr: u32,
-//!
-//!     /// public field -> public accessor functions
-//!     #[bits(12)]
-//!     pub size: usize,
-//!
-//!     /// padding: No accessor functions are generated for fields beginning with `_`.
-//!     #[bits(6)]
-//!     _p: u8,
-//!
+//! #[derive(PartialEq, Eq)] // <- Attributes after `bitfield` are applied carried over
+//! struct MyBitfield {
+//!     /// defaults to 16 bits for u16
+//!     int: u16,
 //!     /// interpreted as 1 bit flag
-//!     present: bool,
-//!
+//!     flag: bool,
+//!     /// custom bit size
+//!     #[bits(1)]
+//!     tiny: u8,
 //!     /// sign extend for signed integers
 //!     #[bits(13)]
 //!     negative: i16,
+//!     /// Supports any type that implements `From<u64>` and `Into<u64>`
+//!     #[bits(16)]
+//!     custom: CustomEnum,
+//!     /// public field -> public accessor functions
+//!     #[bits(12)]
+//!     pub public: usize,
+//!     /// padding
+//!     #[bits(5)]
+//!     _p: u8,
+//!     /// zero-sized members are ignored
+//!     #[bits(0)]
+//!     _completely_ignored: String,
 //! }
+//!
+//! /// A custom enum
+//! #[derive(Debug, PartialEq, Eq)]
+//! #[repr(u64)]
+//! enum CustomEnum {
+//!     A = 0,
+//!     B = 1,
+//!     C = 2,
+//! }
+//! // implement `From<u64>` and `Into<u64>` for `CustomEnum`!
+//! # impl From<u64> for CustomEnum {
+//! #     fn from(value: u64) -> Self {
+//! #         match value {
+//! #             0 => Self::A,
+//! #             1 => Self::B,
+//! #             _ => Self::C,
+//! #         }
+//! #     }
+//! # }
+//! # impl From<CustomEnum> for u64 {
+//! #     fn from(value: CustomEnum) -> Self {
+//! #         value as _
+//! #     }
+//! # }
+//!
+//! // Usage:
+//! let mut val = MyBitfield::new()
+//!     .with_int(3 << 15)
+//!     .with_flag(true)
+//!     .with_tiny(1)
+//!     .with_negative(-3)
+//!     .with_custom(CustomEnum::B)
+//!     .with_public(2);
+//!
+//! println!("{val:?}");
+//! let raw: u64 = val.into();
+//! println!("{raw:b}");
+//!
+//! assert_eq!(val.int(), 3 << 15);
+//! assert_eq!(val.flag(), true);
+//! assert_eq!(val.negative(), -3);
+//! assert_eq!(val.tiny(), 1);
+//! assert_eq!(val.custom(), CustomEnum::B);
+//! assert_eq!(val.public(), 2);
+//!
+//! // const members
+//! assert_eq!(MyBitfield::FLAG_BITS, 1);
+//! assert_eq!(MyBitfield::FLAG_OFFSET, 16);
+//!
+//! val.set_negative(1);
+//! assert_eq!(val.negative(), 1);
 //! ```
 //!
 //! The macro generates three accessor functions for each field.
@@ -38,55 +95,23 @@
 //!
 //! ```ignore
 //! // generated struct
-//! struct PageTableEntry(u64);
-//! impl PageTableEntry {
+//! struct MyBitfield(u64);
+//! impl MyBitfield {
 //!     const fn new() -> Self { Self(0) }
 //!
-//!     const ADDR_BITS: usize = 32;
-//!     const ADDR_OFFSET: usize = 0;
+//!     const INT_BITS: usize = 32;
+//!     const INT_OFFSET: usize = 0;
 //!
-//!     const fn with_addr(self, value: u32) -> Self { /* ... */ }
-//!     const fn addr(&self) -> u32 { /* ... */ }
-//!     fn set_addr(&mut self, value: u32) { /* ... */ }
+//!     const fn with_int(self, value: u32) -> Self { /* ... */ }
+//!     const fn int(&self) -> u32 { /* ... */ }
+//!     fn set_int(&mut self, value: u32) { /* ... */ }
 //!
 //!     // other field ...
 //! }
 //! // generated trait implementations
-//! impl From<u64> for PageTableEntry { /* ... */ }
-//! impl From<PageTableEntry> for u64 { /* ... */ }
-//! impl Debug for PageTableEntry { /* ... */ }
-//! ```
-//!
-//! This generated bitfield can then be used as follows.
-//!
-//! ```
-//! # use bitfield_struct::bitfield;
-//! #
-//! # #[bitfield(u64)]
-//! # struct PageTableEntry {
-//! #     addr: u32,
-//! #     #[bits(12)]
-//! #     pub size: usize,
-//! #     #[bits(6)]
-//! #     _p: u8,
-//! #     present: bool,
-//! #     #[bits(13)]
-//! #     negative: i16,
-//! # }
-//!
-//! let mut pte = PageTableEntry::new()
-//!     .with_addr(3 << 31)
-//!     .with_size(2)
-//!     .with_present(false)
-//!     .with_negative(-3);
-//!
-//! println!("{pte:?}");
-//! assert!(pte.addr() == 3 << 31);
-//!
-//! pte.set_size(1);
-//!
-//! let value: u64 = pte.into();
-//! println!("{value:b}");
+//! impl From<u64> for MyBitfield { /* ... */ }
+//! impl From<MyBitfield> for u64 { /* ... */ }
+//! impl Debug for MyBitfield { /* ... */ }
 //! ```
 //!
 //! ## `fmt::Debug`
@@ -109,6 +134,9 @@
 //!         write!(f, "0x{:x}", self.data())
 //!     }
 //! }
+//!
+//! let val = CustomDebug::new().with_data(123);
+//! println!("{val:?}")
 //! ```
 //!
 
@@ -117,7 +145,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote, ToTokens};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{AttrStyle, Attribute, LitBool, LitInt, Token, Type};
+use syn::Token;
 
 /// Creates a bitfield for this struct.
 ///
@@ -150,33 +178,39 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     };
 
     let mut offset = 0;
-    let mut members = TokenStream::new();
-    let mut debug_fields = TokenStream::new();
-
+    let mut members = Vec::with_capacity(fields.named.len());
     for field in fields.named {
-        if let Some((name, tokens)) = bitfield_member(field, &ty, &mut offset)? {
-            members.extend(tokens);
-            let name_str = name.to_string();
-            debug_fields.extend(quote!(.field(#name_str, &self.#name())));
-        }
+        let f = Member::new(ty.clone(), field, offset)?;
+        offset += f.bits;
+        members.push(f);
     }
 
-    if offset != bits {
+    if offset < bits {
         return Err(syn::Error::new(
             span,
             format!(
-                "The bitfiled size has to be equal to the sum of its members! {bits} != {offset}. \
-                Padding can be done by prefixing members with \"_\" which are ignored."
+                "The bitfiled size ({bits} bits) has to be equal to the sum of its members ({offset} bits)!. \
+                You might have to add padding (a {} bits large member prefixed with \"_\").",
+                bits - offset
+            ),
+        ));
+    }
+    if offset > bits {
+        return Err(syn::Error::new(
+            span,
+            format!(
+                "The size of the members ({offset} bits) is larger than the type ({bits} bits)!."
             ),
         ));
     }
 
     let debug_impl = if debug {
+        let debug_fields = members.iter().map(|m| m.debug());
         quote! {
             impl core::fmt::Debug for #name {
                 fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                     f.debug_struct(#name_str)
-                        #debug_fields
+                        #( #debug_fields )*
                         .finish()
                 }
             }
@@ -196,7 +230,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
                 Self(0)
             }
 
-            #members
+            #( #members )*
         }
 
         impl From<#ty> for #name {
@@ -214,138 +248,197 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     })
 }
 
-fn bitfield_member(
-    f: syn::Field,
-    base_ty: &Type,
-    offset: &mut usize,
-) -> syn::Result<Option<(Ident, TokenStream)>> {
-    let syn::Field {
-        ty,
-        vis,
-        ident,
-        attrs,
-        ..
-    } = &f;
+/// Distinguish between different types for code generation.
+///
+/// We need this to make accessor functions for bool and ints const.
+/// As soon as we have const conversion traits, we can simply switch to `TryFrom` and don't have to generate different code.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum TypeClass {
+    Bool,
+    Int,
+    Other,
+}
 
-    let bits = bits(attrs, ty)?;
-    if bits == 0 {
-        // Skip zero sized types
-        return Ok(None);
+struct Member {
+    base_ty: syn::Type,
+    attrs: Vec<syn::Attribute>,
+    ty: syn::Type,
+    class: TypeClass,
+    bits: usize,
+    ident: syn::Ident,
+    vis: syn::Visibility,
+    offset: usize,
+}
+
+impl Member {
+    fn new(base_ty: syn::Type, f: syn::Field, offset: usize) -> syn::Result<Self> {
+        let span = f.span();
+
+        let syn::Field {
+            mut attrs,
+            vis,
+            ident,
+            ty,
+            ..
+        } = f;
+
+        let ident = ident.ok_or_else(|| syn::Error::new(span, "Not supported"))?;
+
+        let (class, bits) = bits(&attrs, &ty)?;
+        // remove our attribute
+        attrs.retain(|a| !a.path.is_ident("bits"));
+
+        Ok(Self {
+            base_ty,
+            attrs,
+            ty,
+            class,
+            bits,
+            ident,
+            vis,
+            offset,
+        })
     }
 
-    let start = *offset;
-    *offset = start + bits;
-
-    let Some(name) = ident
-        .as_ref()
-        .and_then(|name| (!name.to_string().starts_with('_')).then_some(name)) else {
-        // Skip if unnamed
-        return Ok(None);
-    };
-
-    let with_name = format_ident!("with_{name}");
-    let set_name = format_ident!("set_{name}");
-    let bits_name = format_ident!("{}_BITS", name.to_string().to_uppercase());
-    let offset_name = format_ident!("{}_OFFSET", name.to_string().to_uppercase());
-
-    let location = format!("\n\nBits: {start}..{offset}");
-
-    let doc: TokenStream = attrs
-        .iter()
-        .filter(|a| !a.path.is_ident("bits"))
-        .map(ToTokens::to_token_stream)
-        .collect();
-
-    if bits > 1 {
-        let mask: u128 = !0 >> (u128::BITS as usize - bits);
-        let mask = LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
-
-        Ok(Some((
-            name.clone(),
-            quote! {
-                const #bits_name: usize = #bits;
-                const #offset_name: usize = #start;
-
-                #doc
-                #[doc = #location]
-                #vis const fn #with_name(self, value: #ty) -> Self {
-                    debug_assert!(value <= #mask);
-                    Self(self.0 & !(#mask << #start) | (value as #base_ty & #mask) << #start)
-                }
-                #doc
-                #[doc = #location]
-                #vis const fn #name(&self) -> #ty {
-                    (((self.0 >> #start) as #ty) << #ty::BITS as usize - #bits) >> #ty::BITS as usize - #bits
-                }
-                #doc
-                #[doc = #location]
-                #vis fn #set_name(&mut self, value: #ty) {
-                    debug_assert!(value <= #mask);
-                    *self = self.#with_name(value);
-                }
-            },
-        )))
-    } else {
-        // Casting to a bool or a number is syntactically different...
-        let cast = if matches!(ty, Type::Path(p) if p.path.is_ident("bool")) {
-            quote! { != 0 }
+    fn debug(&self) -> TokenStream {
+        let ident_str = self.ident.to_string();
+        if self.bits > 0 && !ident_str.starts_with('_') {
+            let ident = &self.ident;
+            quote!(.field(#ident_str, &self.#ident()))
         } else {
-            quote! { as _ }
+            Default::default()
+        }
+    }
+}
+
+impl ToTokens for Member {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let Self {
+            base_ty,
+            attrs,
+            ty,
+            class,
+            bits,
+            ident,
+            vis,
+            offset,
+        } = self;
+        let ident_str = ident.to_string();
+
+        // Skip zero sized and padding members
+        if self.bits == 0 || ident_str.starts_with('_') {
+            return Default::default();
+        }
+
+        let with_ident = format_ident!("with_{ident}");
+        let set_ident = format_ident!("set_{ident}");
+        let bits_ident = format_ident!("{}_BITS", ident_str.to_uppercase());
+        let offset_ident = format_ident!("{}_OFFSET", ident_str.to_uppercase());
+
+        let location = format!("\n\nBits: {offset}..{}", offset + bits);
+
+        let doc: TokenStream = attrs
+            .iter()
+            .filter(|a| !a.path.is_ident("bits"))
+            .map(ToTokens::to_token_stream)
+            .collect();
+
+        let general = quote! {
+            const #bits_ident: usize = #bits;
+            const #offset_ident: usize = #offset;
+
+            #doc
+            #[doc = #location]
+            #vis fn #set_ident(&mut self, value: #ty) {
+                *self = self.#with_ident(value);
+            }
         };
 
-        Ok(Some((
-            name.clone(),
-            quote! {
-                const #bits_name: usize = #bits;
-                const #offset_name: usize = #start;
+        let mask: u128 = !0 >> (u128::BITS as usize - bits);
+        let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
+
+        let code = match class {
+            TypeClass::Bool => quote! {
+                #general
 
                 #doc
                 #[doc = #location]
-                #vis const fn #with_name(self, value: #ty) -> Self {
-                    Self(self.0 & !(1 << #start) | (value as #base_ty & 1) << #start)
+                #vis const fn #with_ident(self, value: #ty) -> Self {
+                    Self(self.0 & !(1 << #offset) | (value as #base_ty & 1) << #offset)
                 }
                 #doc
                 #[doc = #location]
-                #vis const fn #name(&self) -> #ty {
-                    ((self.0 >> #start) & 1) #cast
-                }
-                #doc
-                #[doc = #location]
-                #vis fn #set_name(&mut self, value: #ty) {
-                    *self = self.#with_name(value);
+                #vis const fn #ident(&self) -> #ty {
+                    ((self.0 >> #offset) & 1) != 0
                 }
             },
-        )))
+            TypeClass::Int => quote! {
+                #general
+
+                #doc
+                #[doc = #location]
+                #vis const fn #with_ident(self, value: #ty) -> Self {
+                    debug_assert!(value <= #mask);
+                    Self(self.0 & !(#mask << #offset) | (value as #base_ty & #mask) << #offset)
+                }
+                #doc
+                #[doc = #location]
+                #vis const fn #ident(&self) -> #ty {
+                    (((self.0 >> #offset) as #ty) << #ty::BITS as usize - #bits) >> #ty::BITS as usize - #bits
+                }
+            },
+            TypeClass::Other => quote! {
+                #general
+
+                #doc
+                #[doc = #location]
+                #vis fn #with_ident(self, value: #ty) -> Self {
+                    let value: #base_ty = value.into();
+                    debug_assert!(value <= #mask);
+                    Self(self.0 & !(#mask << #offset) | (value & #mask) << #offset)
+                }
+                #doc
+                #[doc = #location]
+                #vis fn #ident(&self) -> #ty {
+                    (((self.0 >> #offset) << #base_ty::BITS as usize - #bits) >> #base_ty::BITS as usize - #bits).into()
+                }
+            },
+        };
+        tokens.extend(code);
     }
 }
 
 /// Parses the `bits` attribute that allows specifying a custom number of bits.
-fn bits(attrs: &[Attribute], ty: &Type) -> syn::Result<usize> {
-    fn malformed(mut e: syn::Error, attr: &Attribute) -> syn::Error {
+fn bits(attrs: &[syn::Attribute], ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
+    fn malformed(mut e: syn::Error, attr: &syn::Attribute) -> syn::Error {
         e.combine(syn::Error::new_spanned(attr, "malformed #[bits] attribute"));
         e
     }
 
     for attr in attrs {
         match attr {
-            Attribute {
-                style: AttrStyle::Outer,
+            syn::Attribute {
+                style: syn::AttrStyle::Outer,
                 path,
                 tokens,
                 ..
             } if path.is_ident("bits") => {
                 let bits = attr
-                    .parse_args::<LitInt>()
+                    .parse_args::<syn::LitInt>()
                     .map_err(|e| malformed(e, attr))?
                     .base10_parse()
                     .map_err(|e| malformed(e, attr))?;
 
                 return if bits == 0 {
-                    Ok(0)
-                } else if bits <= type_bits(ty)? {
-                    Ok(bits)
+                    Ok((TypeClass::Other, 0))
+                } else if let Ok((class, size)) = type_bits(ty) {
+                    if bits <= size {
+                        Ok((class, bits))
+                    } else {
+                        Err(syn::Error::new_spanned(tokens, "overflowing member type"))
+                    }
                 } else {
-                    Err(syn::Error::new_spanned(&tokens, "overflowing member type"))
+                    Ok((TypeClass::Other, bits))
                 };
             }
             _ => {}
@@ -357,37 +450,41 @@ fn bits(attrs: &[Attribute], ty: &Type) -> syn::Result<usize> {
 }
 
 /// Returns the number of bits for a given type
-fn type_bits(ty: &Type) -> syn::Result<usize> {
+fn type_bits(ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
+    use syn::Type::Path;
     match ty {
-        Type::Path(path) if path.path.is_ident("bool") => Ok(1),
-        Type::Path(path) if path.path.is_ident("u8") => Ok(u8::BITS as _),
-        Type::Path(path) if path.path.is_ident("i8") => Ok(i8::BITS as _),
-        Type::Path(path) if path.path.is_ident("u16") => Ok(u16::BITS as _),
-        Type::Path(path) if path.path.is_ident("i16") => Ok(i16::BITS as _),
-        Type::Path(path) if path.path.is_ident("u32") => Ok(u32::BITS as _),
-        Type::Path(path) if path.path.is_ident("i32") => Ok(i32::BITS as _),
-        Type::Path(path) if path.path.is_ident("u64") => Ok(u64::BITS as _),
-        Type::Path(path) if path.path.is_ident("i64") => Ok(i64::BITS as _),
-        Type::Path(path) if path.path.is_ident("u128") => Ok(u128::BITS as _),
-        Type::Path(path) if path.path.is_ident("i128") => Ok(i128::BITS as _),
-        Type::Path(path) if path.path.is_ident("usize") => Ok(usize::BITS as _),
-        Type::Path(path) if path.path.is_ident("isize") => Ok(isize::BITS as _),
+        Path(path) if path.path.is_ident("bool") => Ok((TypeClass::Bool, 1)),
+        Path(path) if path.path.is_ident("u8") => Ok((TypeClass::Int, u8::BITS as _)),
+        Path(path) if path.path.is_ident("i8") => Ok((TypeClass::Int, i8::BITS as _)),
+        Path(path) if path.path.is_ident("u16") => Ok((TypeClass::Int, u16::BITS as _)),
+        Path(path) if path.path.is_ident("i16") => Ok((TypeClass::Int, i16::BITS as _)),
+        Path(path) if path.path.is_ident("u32") => Ok((TypeClass::Int, u32::BITS as _)),
+        Path(path) if path.path.is_ident("i32") => Ok((TypeClass::Int, i32::BITS as _)),
+        Path(path) if path.path.is_ident("u64") => Ok((TypeClass::Int, u64::BITS as _)),
+        Path(path) if path.path.is_ident("i64") => Ok((TypeClass::Int, i64::BITS as _)),
+        Path(path) if path.path.is_ident("u128") => Ok((TypeClass::Int, u128::BITS as _)),
+        Path(path) if path.path.is_ident("i128") => Ok((TypeClass::Int, i128::BITS as _)),
+        Path(path) if path.path.is_ident("usize") => Ok((TypeClass::Int, usize::BITS as _)),
+        Path(path) if path.path.is_ident("isize") => Ok((TypeClass::Int, isize::BITS as _)),
         _ => Err(syn::Error::new_spanned(ty, "unsupported type")),
     }
 }
 
 struct Params {
-    ty: Type,
+    ty: syn::Type,
     bits: usize,
     debug: bool,
 }
 
 impl Parse for Params {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let Ok(ty) = Type::parse(input) else {
+        let Ok(ty) = syn::Type::parse(input) else {
             return Err(syn::Error::new(input.span(), "unknown type"));
         };
-        let bits = type_bits(&ty)?;
+        let (class, bits) = type_bits(&ty)?;
+        if class == TypeClass::Bool {
+            return Err(syn::Error::new(input.span(), "unknown type"));
+        }
 
         // try parse additional debug arg
         let debug = if <Token![,]>::parse(input).is_ok() {
@@ -398,7 +495,7 @@ impl Parse for Params {
             }
             <Token![=]>::parse(input)?;
 
-            let val = LitBool::parse(input)?;
+            let val = syn::LitBool::parse(input)?;
             val.value
         } else {
             true

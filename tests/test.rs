@@ -4,31 +4,52 @@ use bitfield_struct::bitfield;
 
 /// A test bitfield with documentation
 #[bitfield(u64)]
-struct PageTableEntry {
-    /// defaults to 32 bits for u32
-    addr: u32,
-
-    /// public field -> public accessor functions
-    #[bits(12)]
-    pub size: usize,
-
-    /// padding
-    #[bits(5)]
-    _p: u8,
-
-    #[bits(1)]
-    bug: u8,
-
+struct MyBitfield {
+    /// defaults to 16 bits for u16
+    int: u16,
     /// interpreted as 1 bit flag
-    present: bool,
-
+    flag: bool,
+    /// custom bit size
+    #[bits(1)]
+    tiny: u8,
     /// sign extend for signed integers
     #[bits(13)]
     negative: i16,
-
-    /// Ignore this member completely
+    /// Supports any type that implements `From<u64>` and `Into<u64>`
+    #[bits(16)]
+    custom: CustomEnum,
+    /// public field -> public accessor functions
+    #[bits(12)]
+    pub public: usize,
+    /// padding
+    #[bits(5)]
+    _p: u8,
+    /// zero-sized members are ignored
     #[bits(0)]
     _completely_ignored: String,
+}
+
+/// A custom enum
+#[derive(Debug, PartialEq, Eq)]
+#[repr(u64)]
+enum CustomEnum {
+    A = 0,
+    B = 1,
+    C = 2,
+}
+impl From<u64> for CustomEnum {
+    fn from(value: u64) -> Self {
+        match value {
+            0 => Self::A,
+            1 => Self::B,
+            _ => Self::C,
+        }
+    }
+}
+impl From<CustomEnum> for u64 {
+    fn from(value: CustomEnum) -> Self {
+        value as _
+    }
 }
 
 /// We have a custom debug implementation -> opt out
@@ -45,36 +66,50 @@ impl fmt::Debug for Full {
 }
 
 #[test]
-fn basics() {
-    let pte = PageTableEntry::new()
-        .with_addr(3 << 31)
-        .with_size(2)
-        .with_present(false)
-        .with_negative(-3);
-    println!("{pte:?}");
+fn members() {
+    let mut val = MyBitfield::new()
+        .with_int(3 << 15)
+        .with_flag(true)
+        .with_tiny(1)
+        .with_negative(-3)
+        .with_custom(CustomEnum::B)
+        .with_public(2);
 
-    let value: u64 = pte.into();
-    println!("{value:b}");
+    println!("{val:?}");
 
-    assert_eq!(pte.addr(), 3 << 31);
-    assert_eq!(pte.size(), 2);
-    assert_eq!(pte.present(), false);
-    assert_eq!(pte.negative(), -3);
+    let raw: u64 = val.into();
+    println!("{raw:b}");
 
-    // Static members
-    assert_eq!(PageTableEntry::PRESENT_BITS, 1);
-    assert_eq!(PageTableEntry::PRESENT_OFFSET, 50);
+    assert_eq!(val.int(), 3 << 15);
+    assert_eq!(val.flag(), true);
+    assert_eq!(val.negative(), -3);
+    assert_eq!(val.tiny(), 1);
+    assert_eq!(val.custom(), CustomEnum::B);
+    assert_eq!(val.public(), 2);
 
-    let mut pte = pte.with_present(true);
-    assert_eq!(pte.present(), true);
-    pte.set_size(1);
-    assert_eq!(pte.size(), 1);
+    // const members
+    assert_eq!(MyBitfield::FLAG_BITS, 1);
+    assert_eq!(MyBitfield::FLAG_OFFSET, 16);
+
+    val.set_negative(1);
+    assert_eq!(val.negative(), 1);
+
+    let pte = val.with_flag(false);
+    assert_eq!(pte.flag(), false);
+}
+
+#[test]
+fn attrs() {
+    let full = Full::default();
+    assert_eq!(full, Full::new());
 
     let full = Full::new().with_data(u64::MAX);
     assert_eq!(full.data(), u64::MAX);
     assert!(full == Full::new().with_data(u64::MAX));
+}
 
+#[test]
+fn debug() {
     let full = Full::default();
-    assert!(full == Full::new());
     println!("{full:?}");
 }
