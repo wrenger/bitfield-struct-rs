@@ -15,7 +15,7 @@ struct MyBitfield {
     /// sign extend for signed integers
     #[bits(13)]
     negative: i16,
-    /// Supports any type that implements `From<u64>` and `Into<u64>`
+    /// supports any type that implements `From<u64>` and `Into<u64>`
     #[bits(16)]
     custom: CustomEnum,
     /// public field -> public accessor functions

@@ -21,7 +21,7 @@ bitfield-struct = "0.3"
 use bitfield_struct::bitfield;
 /// A test bitfield with documentation
 #[bitfield(u64)]
-#[derive(PartialEq, Eq)] // <- Attributes after `bitfield` are applied carried over
+#[derive(PartialEq, Eq)] // <- Attributes after `bitfield` are carried over
 struct MyBitfield {
     /// defaults to 16 bits for u16
     int: u16,
@@ -33,7 +33,7 @@ struct MyBitfield {
     /// sign extend for signed integers
     #[bits(13)]
     negative: i16,
-    /// Supports any type that implements `From<u64>` and `Into<u64>`
+    /// supports any type that implements `From<u64>` and `Into<u64>`
     #[bits(16)]
     custom: CustomEnum,
     /// public field -> public accessor functions
