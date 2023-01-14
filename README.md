@@ -17,7 +17,7 @@ bitfield-struct = "0.3"
 
 ## Example
 
-```rs
+```rust
 use bitfield_struct::bitfield;
 /// A test bitfield with documentation
 #[bitfield(u64)]
@@ -88,7 +88,7 @@ The macro generates three accessor functions for each field.
 Each accessor also inherits the documentation of its field.
 The signatures for `addr` are:
 
-```rs
+```rust
 // generated struct
 struct MyBitfield(u64);
 impl MyBitfield {
@@ -115,7 +115,7 @@ This macro automatically creates a suitable `fmt::Debug` implementation
 similar to the ones created for normal structs by `#[derive(Debug)]`.
 You can disable it with the extra debug argument.
 
-```rs
+```rust
 #[bitfield(u64, debug = false)]
 struct CustomDebug {
     data: u64
