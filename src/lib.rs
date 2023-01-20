@@ -5,6 +5,8 @@
 //!
 //! ## Example
 //!
+//! The example below shows the main features of the macro and how to use them.
+//!
 //! ```
 //! # use bitfield_struct::bitfield;
 //! /// A test bitfield with documentation
@@ -98,12 +100,12 @@
 //! impl MyBitfield {
 //!     const fn new() -> Self { Self(0) }
 //!
-//!     const INT_BITS: usize = 32;
+//!     const INT_BITS: usize = 16;
 //!     const INT_OFFSET: usize = 0;
 //!
-//!     const fn with_int(self, value: u32) -> Self { /* ... */ }
-//!     const fn int(&self) -> u32 { /* ... */ }
-//!     fn set_int(&mut self, value: u32) { /* ... */ }
+//!     const fn with_int(self, value: u16) -> Self { /* ... */ }
+//!     const fn int(&self) -> u16 { /* ... */ }
+//!     fn set_int(&mut self, value: u16) { /* ... */ }
 //!
 //!     // other field ...
 //! }
@@ -112,6 +114,8 @@
 //! impl From<MyBitfield> for u64 { /* ... */ }
 //! impl Debug for MyBitfield { /* ... */ }
 //! ```
+//!
+//! > Hint: You can use the rust-analyzer "Expand macro recursively" action to view the generated code.
 //!
 //! ## `fmt::Debug`
 //!
@@ -142,6 +146,7 @@
 use proc_macro as pc;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote, ToTokens};
+use std::stringify;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::Token;
@@ -151,8 +156,8 @@ use syn::Token;
 /// The arguments first, have to begin with the underlying type of the bitfield:
 /// For example: `#[bitfield(u64)]`.
 ///
-/// Then optionally can contain an extra debug argument, for disabling the automatic Debug trait generation.
-/// Like: `#[bitfield(u64, debug = false)]`
+/// It can contain an extra `debug` argument for disabling the `Debug` trait
+/// generation (`#[bitfield(u64, debug = false)]`).
 #[proc_macro_attribute]
 pub fn bitfield(args: pc::TokenStream, input: pc::TokenStream) -> pc::TokenStream {
     match bitfield_inner(args.into(), input.into()) {
@@ -410,7 +415,7 @@ impl ToTokens for Member {
 /// Parses the `bits` attribute that allows specifying a custom number of bits.
 fn bits(attrs: &[syn::Attribute], ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
     fn malformed(mut e: syn::Error, attr: &syn::Attribute) -> syn::Error {
-        e.combine(syn::Error::new_spanned(attr, "malformed #[bits] attribute"));
+        e.combine(syn::Error::new(attr.span(), "malformed #[bits] attribute"));
         e
     }
 
@@ -434,7 +439,7 @@ fn bits(attrs: &[syn::Attribute], ty: &syn::Type) -> syn::Result<(TypeClass, usi
                     if bits <= size {
                         Ok((class, bits))
                     } else {
-                        Err(syn::Error::new_spanned(tokens, "overflowing member type"))
+                        Err(syn::Error::new(tokens.span(), "overflowing member type"))
                     }
                 } else {
                     Ok((TypeClass::Other, bits))
@@ -450,23 +455,24 @@ fn bits(attrs: &[syn::Attribute], ty: &syn::Type) -> syn::Result<(TypeClass, usi
 
 /// Returns the number of bits for a given type
 fn type_bits(ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
-    use syn::Type::Path;
-    match ty {
-        Path(path) if path.path.is_ident("bool") => Ok((TypeClass::Bool, 1)),
-        Path(path) if path.path.is_ident("u8") => Ok((TypeClass::Int, u8::BITS as _)),
-        Path(path) if path.path.is_ident("i8") => Ok((TypeClass::Int, i8::BITS as _)),
-        Path(path) if path.path.is_ident("u16") => Ok((TypeClass::Int, u16::BITS as _)),
-        Path(path) if path.path.is_ident("i16") => Ok((TypeClass::Int, i16::BITS as _)),
-        Path(path) if path.path.is_ident("u32") => Ok((TypeClass::Int, u32::BITS as _)),
-        Path(path) if path.path.is_ident("i32") => Ok((TypeClass::Int, i32::BITS as _)),
-        Path(path) if path.path.is_ident("u64") => Ok((TypeClass::Int, u64::BITS as _)),
-        Path(path) if path.path.is_ident("i64") => Ok((TypeClass::Int, i64::BITS as _)),
-        Path(path) if path.path.is_ident("u128") => Ok((TypeClass::Int, u128::BITS as _)),
-        Path(path) if path.path.is_ident("i128") => Ok((TypeClass::Int, i128::BITS as _)),
-        Path(path) if path.path.is_ident("usize") => Ok((TypeClass::Int, usize::BITS as _)),
-        Path(path) if path.path.is_ident("isize") => Ok((TypeClass::Int, isize::BITS as _)),
-        _ => Err(syn::Error::new_spanned(ty, "unsupported type")),
+    let syn::Type::Path(syn::TypePath{ path, .. }) = ty else {
+        return Err(syn::Error::new(ty.span(), "unsupported type"))
+    };
+    let Some(ident) = path.get_ident() else {
+        return Err(syn::Error::new(ty.span(), "unsupported type"))
+    };
+    if ident == "bool" {
+        return Ok((TypeClass::Bool, 1));
     }
+    macro_rules! integer {
+        ($ident:ident => $($ty:ident),*) => {
+            match ident {
+                $(_ if ident == stringify!($ty) => Ok((TypeClass::Int, $ty::BITS as _)),)*
+                _ => Err(syn::Error::new(ty.span(), "unsupported type"))
+            }
+        };
+    }
+    integer!(ident => u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, usize, isize)
 }
 
 struct Params {
@@ -481,8 +487,8 @@ impl Parse for Params {
             return Err(syn::Error::new(input.span(), "unknown type"));
         };
         let (class, bits) = type_bits(&ty)?;
-        if class == TypeClass::Bool {
-            return Err(syn::Error::new(input.span(), "unknown type"));
+        if class != TypeClass::Int {
+            return Err(syn::Error::new(input.span(), "unsupported type"));
         }
 
         // try parse additional debug arg
@@ -494,8 +500,7 @@ impl Parse for Params {
             }
             <Token![=]>::parse(input)?;
 
-            let val = syn::LitBool::parse(input)?;
-            val.value
+            syn::LitBool::parse(input)?.value
         } else {
             true
         };

@@ -95,6 +95,7 @@ assert_eq!(val.negative(), 1);
 
 The macro generates three accessor functions for each field.
 Each accessor also inherits the documentation of its field.
+
 The signatures for `int` are:
 
 ```rust
@@ -103,7 +104,7 @@ struct MyBitfield(u64);
 impl MyBitfield {
     const fn new() -> Self { Self(0) }
 
-    const INT_BITS: usize = 32;
+    const INT_BITS: usize = 16;
     const INT_OFFSET: usize = 0;
 
     const fn with_int(self, value: u16) -> Self { /* ... */ }
