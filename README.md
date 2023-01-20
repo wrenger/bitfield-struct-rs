@@ -3,8 +3,16 @@
 [![Crate](https://img.shields.io/crates/v/bitfield-struct.svg)](https://crates.io/crates/bitfield-struct)
 [![API](https://docs.rs/bitfield-struct/badge.svg)](https://docs.rs/bitfield-struct)
 
-Procedural macro for bitfields that allows specifying bitfields as structs.
+Procedural macro for declarative defining bitfields similar to structs.
 As this library provides a procedural macro, it has no runtime dependencies and works for `no-std`.
+
+- Supports bool flags, raw integers, and every custom type convertible into integers (structs/enums)
+- Ideal for driver/OS/embedded development (defining HW registers/structures)
+- Generates minimalistic, pure, safe rust functions
+- Compile-time checks for type and field sizes
+- Rust-analyzer friendly (carries over documentation to accessor functions)
+- Exports field offsets and sizes as constants (useful for const asserts)
+- Generation of `fmt::Debug`
 
 ## Usage
 
@@ -16,6 +24,8 @@ bitfield-struct = "0.3"
 ```
 
 ## Example
+
+The example below shows the main features of the macro and how to use them.
 
 ```rust
 /// A test bitfield with documentation
@@ -96,9 +106,9 @@ impl MyBitfield {
     const INT_BITS: usize = 32;
     const INT_OFFSET: usize = 0;
 
-    const fn with_int(self, value: u32) -> Self { /* ... */ }
-    const fn int(&self) -> u32 { /* ... */ }
-    fn set_int(&mut self, value: u32) { /* ... */ }
+    const fn with_int(self, value: u16) -> Self { /* ... */ }
+    const fn int(&self) -> u16 { /* ... */ }
+    fn set_int(&mut self, value: u16) { /* ... */ }
 
     // other field ...
 }
@@ -107,6 +117,8 @@ impl From<u64> for MyBitfield { /* ... */ }
 impl From<MyBitfield> for u64 { /* ... */ }
 impl Debug for MyBitfield { /* ... */ }
 ```
+
+> Hint: You can use the rust-analyzer "Expand macro recursively" action to view the generated code.
 
 ## `fmt::Debug`
 
