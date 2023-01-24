@@ -23,9 +23,63 @@ Add this to your `Cargo.toml`:
 bitfield-struct = "0.3"
 ```
 
-## Example
+## Basics
 
-The example below shows the main features of the macro and how to use them.
+Let's begin with a simple example.
+Suppose we want to store multiple data inside a single Byte, as shown below:
+
+<table>
+  <tr>
+    <td>7</td>
+    <td>6</td>
+    <td>5</td>
+    <td>4</td>
+    <td>3</td>
+    <td>3</td>
+    <td>1</td>
+    <td>0</td>
+  </tr>
+  <tr>
+    <td>P</td>
+    <td colspan="2">Level</td>
+    <td>S</td>
+    <td colspan="4">Kind</td>
+  </tr>
+</table>
+
+This crate generates a nice wrapper type that makes it easy to do this:
+
+```rust
+/// Define your type like this with the bitfield attribute
+#[bitfield(u8)]
+struct MyByte {
+    /// The first field occupies the least significant bits
+    #[bits(4)]
+    kind: usize,
+    /// Booleans are 1 bit large
+    system: bool,
+    /// The bits attribute specifies the bit size of this field
+    #[bits(2)]
+    level: usize,
+    /// The last field spans over the most significant bits
+    present: bool
+}
+// The macro creates three accessor functions for each field:
+// <name>, with_<name> and set_<name>
+let my_byte = MyByte::new()
+    .with_kind(15)
+    .with_system(false)
+    .with_level(3)
+    .with_present(true);
+
+assert!(my_byte.present());
+```
+
+## Features
+
+Additionally, this crate has a few useful features, which are shown here in more detail.
+
+The example below shows how attributes are carried over and how signed integers, padding, and custom types are handled.
 
 ```rust
 /// A test bitfield with documentation

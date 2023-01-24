@@ -3,9 +3,72 @@
 //! Procedural macro for bitfields that allows specifying bitfields as structs.
 //! As this library provides a procedural-macro it has no runtime dependencies and works for `no-std`.
 //!
-//! ## Example
+//! - Supports bool flags, raw integers, and every custom type convertible into integers (structs/enums)
+//! - Ideal for driver/OS/embedded development (defining HW registers/structures)
+//! - Generates minimalistic, pure, safe rust functions
+//! - Compile-time checks for type and field sizes
+//! - Rust-analyzer friendly (carries over documentation to accessor functions)
+//! - Exports field offsets and sizes as constants (useful for const asserts)
+//! - Generation of `fmt::Debug`
 //!
-//! The example below shows the main features of the macro and how to use them.
+//! ## Basics
+//!
+//! Let's begin with a simple example.</br>
+//! Suppose we want to store multiple data inside a single Byte, as shown below:
+//!
+//! <table>
+//!   <tr>
+//!     <td>7</td>
+//!     <td>6</td>
+//!     <td>5</td>
+//!     <td>4</td>
+//!     <td>3</td>
+//!     <td>3</td>
+//!     <td>1</td>
+//!     <td>0</td>
+//!   </tr>
+//!   <tr>
+//!     <td>P</td>
+//!     <td colspan="2">Level</td>
+//!     <td>S</td>
+//!     <td colspan="4">Kind</td>
+//!   </tr>
+//! </table>
+//!
+//! This crate is able to generate a nice wrapper type that makes it easy to do this:
+//!
+//! ```
+//! # use bitfield_struct::bitfield;
+//! /// Define your type like this with the bitfield attribute
+//! #[bitfield(u8)]
+//! struct MyByte {
+//!     /// The first field occupies the least significant bits
+//!     #[bits(4)]
+//!     kind: usize,
+//!     /// Booleans are 1 bit large
+//!     system: bool,
+//!     /// The bits attribute specifies the bit size of this field
+//!     #[bits(2)]
+//!     level: usize,
+//!     /// The last field spans over the most significant bits
+//!     present: bool
+//! }
+//! // The macro creates three accessor functions for each field:
+//! // <name>, with_<name> and set_<name>
+//! let my_byte = MyByte::new()
+//!     .with_kind(15)
+//!     .with_system(false)
+//!     .with_level(3)
+//!     .with_present(true);
+//!
+//! assert!(my_byte.present());
+//! ```
+//!
+//! ## Features
+//!
+//! Additionally, this crate has a few useful features, which are shown here in more detail.
+//!
+//! The example below shows how attributes are carried over and how signed integers, padding, and custom types are handled.
 //!
 //! ```
 //! # use bitfield_struct::bitfield;
@@ -439,7 +502,7 @@ fn bits(attrs: &[syn::Attribute], ty: &syn::Type) -> syn::Result<(TypeClass, usi
                     if bits <= size {
                         Ok((class, bits))
                     } else {
-                        Err(syn::Error::new(tokens.span(), "overflowing member type"))
+                        Err(syn::Error::new(tokens.span(), "overflowing field type"))
                     }
                 } else {
                     Ok((TypeClass::Other, bits))
