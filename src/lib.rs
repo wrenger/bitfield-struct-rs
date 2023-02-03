@@ -1,37 +1,68 @@
 pub use bitfield_struct_derive::bitfield;
 
-/// The heart of the bitfield macro
+/// The heart of the bitfield macro.
+/// It copies bits (with different offsets) from `src` to `dst`.
 ///
-/// General idea.
-/// - Copy prefix, suffix bits.
+/// This function is used both for the getters and setters of the bitfield struct.
+///
+///  General idea:
+/// - Copy prefix bits
 /// - Copy aligned u8
-/// - Copy aligned u16 for the inner array
-/// - Copy aligned u32 for the inner inner array
-/// - Copy aligned u64 for the inner inner inner array
+/// - Copy suffix bits
+///
+/// Possible future optimization:
+/// - Copy and shift with larger instructions (u16/u32/u64) if the buffers are large enough
 ///
 /// FIXME: Use mutable reference as soon as `const_mut_refs` is stable
-#[inline]
+#[inline(always)]
 pub fn bit_copy(dst: &mut [u8], dst_off: usize, src: &[u8], src_off: usize, len: usize) {
-    println!("copy {dst:x?}, {dst_off}, {src:x?}, {src_off}, {len}");
     debug_assert!(len > 0);
-    debug_assert!(dst.len() * 8 - dst_off >= len);
-    debug_assert!(src.len() * 8 - src_off >= len);
+    debug_assert!(dst.len() * 8 >= dst_off + len);
+    debug_assert!(src.len() * 8 >= src_off + len);
 
-    let mut len = len;
-    let mut dst = &mut dst[dst_off / 8..];
-    let mut src = &src[src_off / 8..];
+    // normalize input
+    let dst = &mut dst[dst_off / 8..];
+    let src = &src[src_off / 8..];
     let dst_off = dst_off % 8;
-    let mut src_off = src_off % 8;
+    let src_off = src_off % 8;
 
     if len < (8 - dst_off) {
+        // edge case if there are less then one byte to be copied
         single_byte(&mut dst[0], dst_off, src, src_off, len);
-        return;
+    } else if dst_off == src_off {
+        copy_aligned(dst, src, dst_off, len);
+    } else {
+        copy_unaligned(dst, dst_off, src, src_off, len);
     }
+}
 
-    // copy prefix
+#[inline(always)]
+fn single_byte(dst: &mut u8, dst_off: usize, src: &[u8], src_off: usize, len: usize) {
+    let mask = (u8::MAX >> (8 - len)) << dst_off;
+    *dst &= !mask;
+    *dst |= ((src[0] >> src_off) << dst_off) & mask;
+
+    // exceeding a single byte of the src buffer
+    if len + src_off > 8 {
+        *dst |= (src[1] << (8 - src_off + dst_off)) & mask;
+    }
+}
+
+#[inline(always)]
+fn copy_unaligned(
+    mut dst: &mut [u8],
+    dst_off: usize,
+    mut src: &[u8],
+    mut src_off: usize,
+    mut len: usize,
+) {
+    debug_assert!(0 < dst_off && dst_off < 8 && 0 < src_off && src_off < 8);
+    debug_assert!(dst.len() * 8 >= dst_off + len);
+    debug_assert!(src.len() * 8 >= src_off + len);
+
+    // copy dst prefix -> byte-align dst
     if dst_off > 0 {
         let prefix = 8 - dst_off;
-        println!("copy prefix {prefix}");
         let mask = u8::MAX << dst_off;
         dst[0] &= !mask;
         dst[0] |= (src[0] >> src_off) << dst_off;
@@ -49,46 +80,16 @@ pub fn bit_copy(dst: &mut [u8], dst_off: usize, src: &[u8], src_off: usize, len:
         len -= prefix;
     }
 
-    if src_off == 0 {
-        copy_aligned(dst, src, len);
-    } else {
-        copy_dst_aligned(dst, src, src_off, len);
-    }
-}
-
-fn single_byte(dst: &mut u8, dst_off: usize, src: &[u8], src_off: usize, len: usize) {
-    println!("copy small");
-
-    let mask = (u8::MAX >> (8 - len)) << dst_off;
-    *dst &= !mask;
-    *dst |= ((src[0] >> src_off) << dst_off) & mask;
-
-    // exceeding a single byte of the src buffer
-    if len + src_off > 8 {
-        *dst |= (src[1] << (8 - src_off + dst_off)) & mask;
-    }
-}
-
-#[inline]
-fn copy_dst_aligned(dst: &mut [u8], src: &[u8], src_off: usize, len: usize) {
-    println!("dst_aligned {dst:?}, {src:?}, {src_off}, {len}");
-    debug_assert!(0 < src_off && src_off < 8);
-    debug_assert!(dst.len() * 8 >= len);
-    debug_assert!(src.len() * 8 - src_off >= len); // has to be one larger
-
     // copy middle
     for i in 0..len / 8 {
         dst[i] = (src[i] >> src_off) | (src[i + 1] << (8 - src_off));
     }
-    println!("middle {dst:x?}");
 
     // suffix
     let suffix = len % 8;
     if suffix > 0 {
-        println!("copy suffix {suffix}");
         let last = len / 8;
         let mask = u8::MAX >> (8 - suffix);
-
         dst[last] &= !mask;
         dst[last] |= src[last] >> src_off;
 
@@ -98,24 +99,34 @@ fn copy_dst_aligned(dst: &mut [u8], src: &[u8], src_off: usize, len: usize) {
         }
     }
 }
-#[inline]
-fn copy_aligned(dst: &mut [u8], src: &[u8], len: usize) {
-    println!("aligned {dst:?}, {src:?}, {len}");
-    debug_assert!(dst.len() * 8 >= len);
-    debug_assert!(src.len() * 8 >= len);
+#[inline(always)]
+fn copy_aligned(mut dst: &mut [u8], mut src: &[u8], off: usize, mut len: usize) {
+    debug_assert!(0 < off && off < 8);
+    debug_assert!(dst.len() * 8 >= off + len);
+    debug_assert!(src.len() * 8 >= off + len);
+
+    // copy prefix -> byte-align dst
+    if off > 0 {
+        let prefix = 8 - off;
+        let mask = u8::MAX << off;
+        dst[0] &= !mask;
+        dst[0] |= src[0] & mask;
+
+        src = &src[1..];
+        dst = &mut dst[1..];
+        len -= prefix;
+    }
 
     // copy middle
-    for i in 0..len / 8 {
-        dst[i] = src[i];
-    }
-    // suffix
+    let bytes = len / 8;
+    dst[..bytes].copy_from_slice(&src[..bytes]);
+
+    // copy suffix
     let suffix = len % 8;
     if suffix > 0 {
-        println!("copy suffix {suffix}");
-
         let last = len / 8;
-        let mask = u8::MAX >> suffix;
-        dst[last] &= mask;
+        let mask = u8::MAX >> (8 - suffix);
+        dst[last] &= !mask;
         dst[last] |= src[last];
     }
 }
@@ -127,7 +138,21 @@ mod test {
     use super::bitfield;
 
     #[test]
-    fn copy_bits() {
+    fn copy_bits_single_bit() {
+        // single byte
+        let src = &[0b00100000];
+        let dst = &mut [0b10111111];
+        super::bit_copy(dst, 6, src, 5, 1);
+        assert_eq!(dst, &[0b11111111]);
+        // reversed
+        let src = &[!0b00100000];
+        let dst = &mut [!0b10111111];
+        super::bit_copy(dst, 6, src, 5, 1);
+        assert_eq!(dst, &[!0b11111111]);
+    }
+
+    #[test]
+    fn copy_bits_single_byte() {
         // single byte
         let src = &[0b00111000];
         let dst = &mut [0b10001111];
@@ -138,7 +163,10 @@ mod test {
         let dst = &mut [!0b10001111];
         super::bit_copy(dst, 4, src, 3, 3);
         assert_eq!(dst, &[!0b11111111]);
+    }
 
+    #[test]
+    fn copy_bits_unaligned() {
         // two to single byte
         let src = &[0b00000000, 0b11000000, 0b00000111, 0b00000000];
         let dst = &mut [0b00000000, 0b00000000, 0b00000000, 0b00000000];
@@ -171,6 +199,31 @@ mod test {
         let dst = &mut [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
         super::bit_copy(dst, 15, src, 6, 13);
         assert_eq!(dst, &[!0b00000000, !0b10000000, !0b11111111, !0b00001111]);
+    }
+
+    #[test]
+    fn copy_bits_aligned() {
+        // over two bytes
+        let src = &[0b00000000, 0b11000000, 0b00000111, 0b00000000];
+        let dst = &mut [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        super::bit_copy(dst, 14, src, 14, 5);
+        assert_eq!(dst, src);
+        // reversed
+        let src = &[!0b00000000, !0b11000000, !0b00000111, !0b00000000];
+        let dst = &mut [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        super::bit_copy(dst, 14, src, 14, 5);
+        assert_eq!(dst, src);
+
+        // over three bytes
+        let src = &[0b11000000, 0b11100111, 0b00000111, 0b00000000];
+        let dst = &mut [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        super::bit_copy(dst, 14, src, 6, 13);
+        assert_eq!(dst, &[0b00000000, 0b11000000, 0b11100111, 0b00000111]);
+        // reversed
+        let src = &[!0b11000000, !0b11100111, !0b00000111, !0b00000000];
+        let dst = &mut [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        super::bit_copy(dst, 14, src, 6, 13);
+        assert_eq!(dst, &[!0b00000000, !0b11000000, !0b11100111, !0b00000111]);
     }
 
     #[test]
