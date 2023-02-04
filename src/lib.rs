@@ -15,74 +15,109 @@ pub use bitfield_struct_derive::bitfield;
 ///
 /// FIXME: Use mutable reference as soon as `const_mut_refs` is stable
 #[inline(always)]
-pub fn bit_copy(dst: &mut [u8], dst_off: usize, src: &[u8], src_off: usize, len: usize) {
+pub const fn bit_copy<const D: usize>(
+    mut dst: [u8; D],
+    dst_off: usize,
+    src: &[u8],
+    src_off: usize,
+    len: usize,
+) -> [u8; D] {
     debug_assert!(len > 0);
     debug_assert!(dst.len() * 8 >= dst_off + len);
     debug_assert!(src.len() * 8 >= src_off + len);
 
-    // normalize input
-    let dst = &mut dst[dst_off / 8..];
-    let src = &src[src_off / 8..];
-    let dst_off = dst_off % 8;
-    let src_off = src_off % 8;
-
-    if len < (8 - dst_off) {
+    if len == 1 {
+        let dst_i = dst_off / 8;
+        dst[dst_i] = single_bit(dst[dst_i], dst_off % 8, src, src_off);
+        dst
+    } else if len < (8 - (dst_off % 8)) {
         // edge case if there are less then one byte to be copied
-        single_byte(&mut dst[0], dst_off, src, src_off, len);
-    } else if dst_off == src_off {
-        copy_aligned(dst, src, dst_off, len);
+        let dst_i = dst_off / 8;
+        dst[dst_i] = single_byte(dst[dst_i], dst_off % 8, src, src_off, len);
+        dst
+    } else if dst_off % 8 == src_off % 8 {
+        copy_aligned(dst, dst_off / 8, src, src_off / 8, dst_off % 8, len)
     } else {
-        copy_unaligned(dst, dst_off, src, src_off, len);
+        copy_unaligned(dst, dst_off, src, src_off, len)
     }
 }
 
 #[inline(always)]
-fn single_byte(dst: &mut u8, dst_off: usize, src: &[u8], src_off: usize, len: usize) {
+pub const fn is_bit_set(src: &[u8], i: usize) -> bool {
+    debug_assert!(i < src.len() * 8);
+    (src[i / 8] >> (i % 8)) & 1 != 0
+}
+
+#[inline(always)]
+const fn single_bit(dst: u8, dst_off: usize, src: &[u8], src_off: usize) -> u8 {
+    debug_assert!(dst_off < 8);
+    if is_bit_set(src, src_off) {
+        dst | (1 << dst_off)
+    } else {
+        dst & !(1 << dst_off)
+    }
+}
+
+#[inline(always)]
+const fn single_byte(dst: u8, dst_off: usize, src: &[u8], src_off: usize, len: usize) -> u8 {
+    debug_assert!(dst_off < 8);
+
+    let src_i = src_off / 8;
+    let src_off = src_off % 8;
+
     let mask = (u8::MAX >> (8 - len)) << dst_off;
-    *dst &= !mask;
-    *dst |= ((src[0] >> src_off) << dst_off) & mask;
+    let mut dst = dst & !mask;
+    dst |= ((src[src_i] >> src_off) << dst_off) & mask;
 
     // exceeding a single byte of the src buffer
     if len + src_off > 8 {
-        *dst |= (src[1] << (8 - src_off + dst_off)) & mask;
+        dst |= (src[src_i + 1] << (8 - src_off + dst_off)) & mask;
     }
+    dst
 }
 
 #[inline(always)]
-fn copy_unaligned(
-    mut dst: &mut [u8],
-    dst_off: usize,
-    mut src: &[u8],
+const fn copy_unaligned<const D: usize>(
+    mut dst: [u8; D],
+    mut dst_off: usize,
+    src: &[u8],
     mut src_off: usize,
     mut len: usize,
-) {
-    debug_assert!(0 < dst_off && dst_off < 8 && 0 < src_off && src_off < 8);
+) -> [u8; D] {
+    debug_assert!(src_off % 8 != 0 && dst_off % 8 != 0);
     debug_assert!(dst.len() * 8 >= dst_off + len);
     debug_assert!(src.len() * 8 >= src_off + len);
+
+    let mut dst_i = dst_off / 8;
+    dst_off %= 8;
+    let mut src_i = src_off / 8;
+    src_off %= 8;
 
     // copy dst prefix -> byte-align dst
     if dst_off > 0 {
         let prefix = 8 - dst_off;
         let mask = u8::MAX << dst_off;
-        dst[0] &= !mask;
-        dst[0] |= (src[0] >> src_off) << dst_off;
+        dst[dst_i] &= !mask;
+        dst[dst_i] |= (src[src_i] >> src_off) << dst_off;
 
         // exceeding a single byte of the src buffer
         src_off += prefix;
         if let Some(reminder) = src_off.checked_sub(8) {
-            src = &src[1..];
+            src_i += 1;
             if reminder > 0 {
-                dst[0] |= src[0] << (dst_off + reminder)
+                dst[dst_i] |= src[src_i] << (dst_off + reminder)
             }
             src_off = reminder
         }
-        dst = &mut dst[1..];
+        dst_i += 1;
         len -= prefix;
     }
 
     // copy middle
-    for i in 0..len / 8 {
-        dst[i] = (src[i] >> src_off) | (src[i + 1] << (8 - src_off));
+    let mut i = 0;
+    while i < len / 8 {
+        dst[dst_i + i] = (src[src_i + i] >> src_off) | (src[src_i + i + 1] << (8 - src_off));
+        i += 1;
     }
 
     // suffix
@@ -90,45 +125,57 @@ fn copy_unaligned(
     if suffix > 0 {
         let last = len / 8;
         let mask = u8::MAX >> (8 - suffix);
-        dst[last] &= !mask;
-        dst[last] |= src[last] >> src_off;
+        dst[dst_i + last] &= !mask;
+        dst[dst_i + last] |= src[src_i + last] >> src_off;
 
         // exceeding a single byte of the src buffer
         if suffix + src_off > 8 {
-            dst[last] |= (src[last + 1] << (8 - src_off)) & mask;
+            dst[dst_i + last] |= (src[src_i + last + 1] << (8 - src_off)) & mask;
         }
     }
+    dst
 }
 #[inline(always)]
-fn copy_aligned(mut dst: &mut [u8], mut src: &[u8], off: usize, mut len: usize) {
-    debug_assert!(0 < off && off < 8);
-    debug_assert!(dst.len() * 8 >= off + len);
-    debug_assert!(src.len() * 8 >= off + len);
+const fn copy_aligned<const D: usize>(
+    mut dst: [u8; D],
+    mut dst_i: usize,
+    src: &[u8],
+    mut src_i: usize,
+    off: usize,
+    mut len: usize,
+) -> [u8; D] {
+    debug_assert!(off < 8);
+    debug_assert!(dst.len() * 8 >= dst_i * 8 + len);
+    debug_assert!(src.len() * 8 >= src_i * 8 + len);
 
     // copy prefix -> byte-align dst
     if off > 0 {
-        let prefix = 8 - off;
-        let mask = u8::MAX << off;
-        dst[0] &= !mask;
-        dst[0] |= src[0] & mask;
+        let prefix = 8 - (off % 8);
+        let mask = u8::MAX << (off % 8);
+        dst[dst_i] &= !mask;
+        dst[dst_i] |= src[src_i] & mask;
 
-        src = &src[1..];
-        dst = &mut dst[1..];
+        src_i += 1;
+        dst_i += 1;
         len -= prefix;
     }
 
     // copy middle
-    let bytes = len / 8;
-    dst[..bytes].copy_from_slice(&src[..bytes]);
+    let mut i = 0;
+    while i < len / 8 {
+        dst[dst_i + i] = src[src_i + i];
+        i += 1;
+    }
 
     // copy suffix
     let suffix = len % 8;
     if suffix > 0 {
         let last = len / 8;
         let mask = u8::MAX >> (8 - suffix);
-        dst[last] &= !mask;
-        dst[last] |= src[last];
+        dst[dst_i + last] &= !mask;
+        dst[dst_i + last] |= src[src_i + last];
     }
+    dst
 }
 
 #[cfg(test)]
@@ -140,90 +187,90 @@ mod test {
     #[test]
     fn copy_bits_single_bit() {
         // single byte
-        let src = &[0b00100000];
-        let dst = &mut [0b10111111];
-        super::bit_copy(dst, 6, src, 5, 1);
-        assert_eq!(dst, &[0b11111111]);
+        let src = [0b00100000];
+        let dst = [0b10111111];
+        let dst = super::bit_copy(dst, 6, &src, 5, 1);
+        assert_eq!(dst, [0b11111111]);
         // reversed
-        let src = &[!0b00100000];
-        let dst = &mut [!0b10111111];
-        super::bit_copy(dst, 6, src, 5, 1);
-        assert_eq!(dst, &[!0b11111111]);
+        let src = [!0b00100000];
+        let dst = [!0b10111111];
+        let dst = super::bit_copy(dst, 6, &src, 5, 1);
+        assert_eq!(dst, [!0b11111111]);
     }
 
     #[test]
     fn copy_bits_single_byte() {
         // single byte
-        let src = &[0b00111000];
-        let dst = &mut [0b10001111];
-        super::bit_copy(dst, 4, src, 3, 3);
-        assert_eq!(dst, &[0b11111111]);
+        let src = [0b00111000];
+        let dst = [0b10001111];
+        let dst = super::bit_copy(dst, 4, &src, 3, 3);
+        assert_eq!(dst, [0b11111111]);
         // reversed
-        let src = &[!0b00111000];
-        let dst = &mut [!0b10001111];
-        super::bit_copy(dst, 4, src, 3, 3);
-        assert_eq!(dst, &[!0b11111111]);
+        let src = [!0b00111000];
+        let dst = [!0b10001111];
+        let dst = super::bit_copy(dst, 4, &src, 3, 3);
+        assert_eq!(dst, [!0b11111111]);
     }
 
     #[test]
     fn copy_bits_unaligned() {
         // two to single byte
-        let src = &[0b00000000, 0b11000000, 0b00000111, 0b00000000];
-        let dst = &mut [0b00000000, 0b00000000, 0b00000000, 0b00000000];
-        super::bit_copy(dst, 17, src, 14, 5);
-        assert_eq!(dst, &[0b00000000, 0b00000000, 0b00111110, 0b0000000]);
+        let src = [0b00000000, 0b11000000, 0b00000111, 0b00000000];
+        let dst = [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        let dst = super::bit_copy(dst, 17, &src, 14, 5);
+        assert_eq!(dst, [0b00000000, 0b00000000, 0b00111110, 0b0000000]);
         // reversed
-        let src = &[!0b00000000, !0b11000000, !0b00000111, !0b00000000];
-        let dst = &mut [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
-        super::bit_copy(dst, 17, src, 14, 5);
-        assert_eq!(dst, &[!0b00000000, !0b00000000, !0b00111110, !0b0000000]);
+        let src = [!0b00000000, !0b11000000, !0b00000111, !0b00000000];
+        let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        let dst = super::bit_copy(dst, 17, &src, 14, 5);
+        assert_eq!(dst, [!0b00000000, !0b00000000, !0b00111110, !0b0000000]);
 
         // over two bytes
-        let src = &[0b00000000, 0b11000000, 0b00000111, 0b00000000];
-        let dst = &mut [0b00000000, 0b00000000, 0b00000000, 0b00000000];
-        super::bit_copy(dst, 23, src, 14, 5);
-        assert_eq!(dst, &[0b00000000, 0b00000000, 0b10000000, 0b00001111]);
+        let src = [0b00000000, 0b11000000, 0b00000111, 0b00000000];
+        let dst = [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        let dst = super::bit_copy(dst, 23, &src, 14, 5);
+        assert_eq!(dst, [0b00000000, 0b00000000, 0b10000000, 0b00001111]);
         // reversed
-        let src = &[!0b00000000, !0b11000000, !0b00000111, !0b00000000];
-        let dst = &mut [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
-        super::bit_copy(dst, 23, src, 14, 5);
-        assert_eq!(dst, &[!0b00000000, !0b00000000, !0b10000000, !0b00001111]);
+        let src = [!0b00000000, !0b11000000, !0b00000111, !0b00000000];
+        let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        let dst = super::bit_copy(dst, 23, &src, 14, 5);
+        assert_eq!(dst, [!0b00000000, !0b00000000, !0b10000000, !0b00001111]);
 
         // over three bytes
-        let src = &[0b11000000, 0b11111111, 0b00000111, 0b00000000];
-        let dst = &mut [0b00000000, 0b00000000, 0b00000000, 0b00000000];
-        super::bit_copy(dst, 15, src, 6, 13);
-        assert_eq!(dst, &[0b00000000, 0b10000000, 0b11111111, 0b00001111]);
+        let src = [0b11000000, 0b11111111, 0b00000111, 0b00000000];
+        let dst = [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        let dst = super::bit_copy(dst, 15, &src, 6, 13);
+        assert_eq!(dst, [0b00000000, 0b10000000, 0b11111111, 0b00001111]);
         // reversed
-        let src = &[!0b11000000, !0b11111111, !0b00000111, !0b00000000];
-        let dst = &mut [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
-        super::bit_copy(dst, 15, src, 6, 13);
-        assert_eq!(dst, &[!0b00000000, !0b10000000, !0b11111111, !0b00001111]);
+        let src = [!0b11000000, !0b11111111, !0b00000111, !0b00000000];
+        let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        let dst = super::bit_copy(dst, 15, &src, 6, 13);
+        assert_eq!(dst, [!0b00000000, !0b10000000, !0b11111111, !0b00001111]);
     }
 
     #[test]
     fn copy_bits_aligned() {
         // over two bytes
-        let src = &[0b00000000, 0b11000000, 0b00000111, 0b00000000];
-        let dst = &mut [0b00000000, 0b00000000, 0b00000000, 0b00000000];
-        super::bit_copy(dst, 14, src, 14, 5);
+        let src = [0b00000000, 0b11000000, 0b00000111, 0b00000000];
+        let dst = [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        let dst = super::bit_copy(dst, 14, &src, 14, 5);
         assert_eq!(dst, src);
         // reversed
-        let src = &[!0b00000000, !0b11000000, !0b00000111, !0b00000000];
-        let dst = &mut [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
-        super::bit_copy(dst, 14, src, 14, 5);
+        let src = [!0b00000000, !0b11000000, !0b00000111, !0b00000000];
+        let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        let dst = super::bit_copy(dst, 14, &src, 14, 5);
         assert_eq!(dst, src);
 
         // over three bytes
-        let src = &[0b11000000, 0b11100111, 0b00000111, 0b00000000];
-        let dst = &mut [0b00000000, 0b00000000, 0b00000000, 0b00000000];
-        super::bit_copy(dst, 14, src, 6, 13);
-        assert_eq!(dst, &[0b00000000, 0b11000000, 0b11100111, 0b00000111]);
+        let src = [0b11000000, 0b11100111, 0b00000111, 0b00000000];
+        let dst = [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        let dst = super::bit_copy(dst, 14, &src, 6, 13);
+        assert_eq!(dst, [0b00000000, 0b11000000, 0b11100111, 0b00000111]);
         // reversed
-        let src = &[!0b11000000, !0b11100111, !0b00000111, !0b00000000];
-        let dst = &mut [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
-        super::bit_copy(dst, 14, src, 6, 13);
-        assert_eq!(dst, &[!0b00000000, !0b11000000, !0b11100111, !0b00000111]);
+        let src = [!0b11000000, !0b11100111, !0b00000111, !0b00000000];
+        let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        let dst = super::bit_copy(dst, 14, &src, 6, 13);
+        assert_eq!(dst, [!0b00000000, !0b11000000, !0b11100111, !0b00000111]);
     }
 
     #[test]
