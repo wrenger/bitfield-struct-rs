@@ -431,7 +431,7 @@ impl ToTokens for Member {
                 #doc
                 #[doc = #location]
                 #vis const fn #with_ident(self, value: #ty) -> Self {
-                    Self(self.0 & !(1 << #offset) | (value as #base_ty & 1) << #offset)
+                    Self(self.0 & !(1 << #offset) | (value as #base_ty) << #offset)
                 }
                 #doc
                 #[doc = #location]
