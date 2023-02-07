@@ -286,6 +286,20 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         Default::default()
     };
 
+    // The size of isize and usize is architecture dependent and not known for proc_macros,
+    // thus we have to check it with const asserts.
+    let const_asserts = members.iter().filter_map(|m| {
+        if m.class == TypeClass::SizeInt {
+            let bits = m.bits;
+            let msg = format!("overflowing field type of '{}'", m.ident);
+            Some(quote!(
+                const _: () = assert!(#bits <= 8 * std::mem::size_of::<usize>(), #msg);
+            ))
+        } else {
+            None
+        }
+    });
+
     Ok(quote! {
         #attrs
         #[derive(Copy, Clone)]
@@ -311,6 +325,8 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             }
         }
 
+        #( #const_asserts )*
+
         #debug_impl
     })
 }
@@ -321,8 +337,13 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 /// As soon as we have const conversion traits, we can simply switch to `TryFrom` and don't have to generate different code.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum TypeClass {
+    /// Booleans with 1 bit size
     Bool,
+    /// Ints with fixes sizes: u8, u64, ...
     Int,
+    /// Ints with architecture dependend sizes: usize, isize
+    SizeInt,
+    /// Custom types
     Other,
 }
 
@@ -439,7 +460,7 @@ impl ToTokens for Member {
                     ((self.0 >> #offset) & 1) != 0
                 }
             },
-            TypeClass::Int => quote! {
+            TypeClass::Int | TypeClass::SizeInt => quote! {
                 #general
 
                 #doc
@@ -451,7 +472,8 @@ impl ToTokens for Member {
                 #doc
                 #[doc = #location]
                 #vis const fn #ident(&self) -> #ty {
-                    (((self.0 >> #offset) as #ty) << #ty::BITS as usize - #bits) >> #ty::BITS as usize - #bits
+                    let shift = #ty::BITS as usize - #bits;
+                    (((self.0 >> #offset) as #ty) << shift) >> shift
                 }
             },
             TypeClass::Other => quote! {
@@ -467,7 +489,8 @@ impl ToTokens for Member {
                 #doc
                 #[doc = #location]
                 #vis fn #ident(&self) -> #ty {
-                    (((self.0 >> #offset) << #base_ty::BITS as usize - #bits) >> #base_ty::BITS as usize - #bits).into()
+                    let shift = #base_ty::BITS as usize - #bits;
+                    (((self.0 >> #offset) << shift) >> shift).into()
                 }
             },
         };
@@ -504,11 +527,26 @@ fn bits(attrs: &[syn::Attribute], ty: &syn::Type) -> syn::Result<(TypeClass, usi
                     } else {
                         Err(syn::Error::new(tokens.span(), "overflowing field type"))
                     }
+                } else if matches!(ty, syn::Type::Path(syn::TypePath{ path, .. })
+                    if path.is_ident("usize") || path.is_ident("isize"))
+                {
+                    // isize and usize are supported but types size is not known at this point!
+                    // Meaning that they must have a bits attribute explicitly defining their size
+                    Ok((TypeClass::SizeInt, bits))
                 } else {
                     Ok((TypeClass::Other, bits))
                 };
             }
             _ => {}
+        }
+    }
+
+    if let syn::Type::Path(syn::TypePath { path, .. }) = ty {
+        if path.is_ident("usize") || path.is_ident("isize") {
+            return Err(syn::Error::new(
+                ty.span(),
+                "isize and usize fields require the #[bits($1)] attribute",
+            ));
         }
     }
 
@@ -535,7 +573,7 @@ fn type_bits(ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
             }
         };
     }
-    integer!(ident => u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, usize, isize)
+    integer!(ident => u8, i8, u16, i16, u32, i32, u64, i64, u128, i128)
 }
 
 struct Params {
@@ -592,10 +630,10 @@ mod test {
     #[test]
     fn parse_args() {
         let args = quote! {
-            usize
+            u64
         };
         let params = syn::parse2::<Params>(args).unwrap();
-        assert!(params.bits == usize::BITS as usize && params.debug == true);
+        assert!(params.bits == u64::BITS as usize && params.debug == true);
 
         let args = quote! {
             u32, debug = false

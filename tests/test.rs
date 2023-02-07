@@ -95,7 +95,7 @@ fn attrs() {
     }
 
     let full = Full::default();
-    assert_eq!(full.0, Full::new().0);
+    assert_eq!(u64::from(full), u64::from(Full::new()));
 
     let full = Full::new().with_data(u64::MAX);
     assert_eq!(full.data(), u64::MAX);
