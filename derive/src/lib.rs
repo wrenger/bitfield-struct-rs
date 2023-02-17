@@ -231,9 +231,14 @@ pub fn bitfield(args: pc::TokenStream, input: pc::TokenStream) -> pc::TokenStrea
 
 fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     let input = syn::parse2::<syn::ItemStruct>(input)?;
-    let Params { ty, bits, debug } =
-        syn::parse2::<Params>(args).map_err(|e| unsupported_param(e, input.span()))?;
+    let Params {
+        bytes,
+        align,
+        debug,
+        ty,
+    } = syn::parse2::<Params>(args).map_err(|e| unsupported_param(e, input.span()))?;
 
+    let bits = bytes * 8;
     let span = input.fields.span();
     let name = input.ident;
     let name_str = name.to_string();
@@ -247,7 +252,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let mut offset = 0;
     let mut members = Vec::with_capacity(fields.named.len());
     for field in fields.named {
-        let f = Member::new(ty.clone(), field, offset)?;
+        let f = Member::new(field, offset)?;
         offset += f.bits;
         members.push(f);
     }
@@ -299,31 +304,49 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             None
         }
     });
+    let type_conversion = if let Some(ty) = ty {
+        Some(quote! {
+            impl From<#ty> for #name {
+                fn from(v: #ty) -> Self {
+                    Self(v.to_be_bytes())
+                }
+            }
+            impl From<#name> for #ty {
+                fn from(v: #name) -> #ty {
+                    #ty::from_be_bytes(v.0)
+                }
+            }
+        })
+    } else {
+        None
+    };
 
+    let align = syn::LitInt::new(&format!("{align}"), Span::mixed_site());
     Ok(quote! {
         #attrs
         #[derive(Copy, Clone)]
-        #[repr(transparent)]
-        #vis struct #name(#ty);
+        #[repr(align(#align))]
+        #vis struct #name([u8; #bytes]);
 
         impl #name {
             #vis const fn new() -> Self {
-                Self(0)
+                Self([0; #bytes])
             }
 
             #( #members )*
         }
 
-        impl From<#ty> for #name {
-            fn from(v: #ty) -> Self {
+        impl From<[u8; #bytes]> for #name {
+            fn from(v: [u8; #bytes]) -> Self {
                 Self(v)
             }
         }
-        impl From<#name> for #ty {
-            fn from(v: #name) -> #ty {
+        impl From<#name> for [u8; #bytes] {
+            fn from(v: #name) -> [u8; #bytes] {
                 v.0
             }
         }
+        #type_conversion
 
         #( #const_asserts )*
 
@@ -348,7 +371,6 @@ enum TypeClass {
 }
 
 struct Member {
-    base_ty: syn::Type,
     attrs: Vec<syn::Attribute>,
     ty: syn::Type,
     class: TypeClass,
@@ -359,7 +381,7 @@ struct Member {
 }
 
 impl Member {
-    fn new(base_ty: syn::Type, f: syn::Field, offset: usize) -> syn::Result<Self> {
+    fn new(f: syn::Field, offset: usize) -> syn::Result<Self> {
         let span = f.span();
 
         let syn::Field {
@@ -377,7 +399,6 @@ impl Member {
         attrs.retain(|a| !a.path.is_ident("bits"));
 
         Ok(Self {
-            base_ty,
             attrs,
             ty,
             class,
@@ -402,7 +423,6 @@ impl Member {
 impl ToTokens for Member {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self {
-            base_ty,
             attrs,
             ty,
             class,
@@ -442,8 +462,7 @@ impl ToTokens for Member {
             }
         };
 
-        let mask: u128 = !0 >> (u128::BITS as usize - bits);
-        let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
+        let bytes = (bits + 7) / 8;
 
         let code = match class {
             TypeClass::Bool => quote! {
@@ -452,12 +471,13 @@ impl ToTokens for Member {
                 #doc
                 #[doc = #location]
                 #vis const fn #with_ident(self, value: #ty) -> Self {
-                    Self(self.0 & !(1 << #offset) | (value as #base_ty) << #offset)
+                    let src = [value as u8];
+                    Self(bitfield_struct::bit_copy(self.0, #offset, &src, 0, 1))
                 }
                 #doc
                 #[doc = #location]
                 #vis const fn #ident(&self) -> #ty {
-                    ((self.0 >> #offset) & 1) != 0
+                    bitfield_struct::is_bit_set(&self.0, #offset)
                 }
             },
             TypeClass::Int | TypeClass::SizeInt => quote! {
@@ -466,14 +486,22 @@ impl ToTokens for Member {
                 #doc
                 #[doc = #location]
                 #vis const fn #with_ident(self, value: #ty) -> Self {
-                    debug_assert!(value <= #mask);
-                    Self(self.0 & !(#mask << #offset) | (value as #base_ty & #mask) << #offset)
+                    #[cfg(target_endian = "little")]
+                    let src = value.to_le_bytes();
+                    #[cfg(target_endian = "big")]
+                    let src = value.to_be_bytes();
+                    Self(bitfield_struct::bit_copy(self.0, #offset, &src, 0, #bits))
                 }
                 #doc
                 #[doc = #location]
                 #vis const fn #ident(&self) -> #ty {
-                    let shift = #ty::BITS as usize - #bits;
-                    (((self.0 >> #offset) as #ty) << shift) >> shift
+                    let out = bitfield_struct::bit_copy(
+                        [0; #ty::BITS as usize / 8], #ty::BITS as usize - #bits, &self.0, #offset, #bits);
+                    #[cfg(target_endian = "little")]
+                    let out = #ty::from_le_bytes(out);
+                    #[cfg(target_endian = "big")]
+                    let out = #ty::from_be_bytes(out);
+                    out >> (#ty::BITS as usize - #bits)
                 }
             },
             TypeClass::Other => quote! {
@@ -482,15 +510,14 @@ impl ToTokens for Member {
                 #doc
                 #[doc = #location]
                 #vis fn #with_ident(self, value: #ty) -> Self {
-                    let value: #base_ty = value.into();
-                    debug_assert!(value <= #mask);
-                    Self(self.0 & !(#mask << #offset) | (value & #mask) << #offset)
+                    let src: [u8; #bytes] = value.into();
+                    Self(bitfield_struct::bit_copy(self.0, #offset, &src, 0, #bits))
                 }
                 #doc
                 #[doc = #location]
                 #vis fn #ident(&self) -> #ty {
-                    let shift = #base_ty::BITS as usize - #bits;
-                    (((self.0 >> #offset) << shift) >> shift).into()
+                    let out = bitfield_struct::bit_copy([0; #bytes], 0, &self.0, #offset, #bits);
+                    out.into()
                 }
             },
         };
@@ -577,36 +604,76 @@ fn type_bits(ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
 }
 
 struct Params {
-    ty: syn::Type,
-    bits: usize,
+    ty: Option<syn::Type>,
+    bytes: usize,
+    align: usize,
     debug: bool,
 }
 
 impl Parse for Params {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let Ok(ty) = syn::Type::parse(input) else {
-            return Err(syn::Error::new(input.span(), "unknown type"));
-        };
-        let (class, bits) = type_bits(&ty)?;
-        if class != TypeClass::Int {
-            return Err(syn::Error::new(input.span(), "unsupported type"));
+        let mut bytes = 1;
+        let mut align = 1;
+        let mut debug = true;
+        let mut ty = None;
+
+        let params = syn::punctuated::Punctuated::<Param, Token![,]>::parse_terminated(input)?;
+        for (i, param) in params.into_iter().enumerate() {
+            match param {
+                Param::Type(t, bits) => {
+                    if i != 0 {
+                        return Err(syn::Error::new(
+                            input.span(),
+                            "the `ty` argument has to be the first",
+                        ));
+                    }
+                    ty = Some(t);
+                    bytes = bits / 8;
+                    align = bits / 8;
+                }
+                Param::Bytes(b) => bytes = b,
+                Param::Align(a) => align = a,
+                Param::Debug(d) => debug = d,
+            }
         }
 
-        // try parse additional debug arg
-        let debug = if <Token![,]>::parse(input).is_ok() {
-            let ident = Ident::parse(input)?;
+        Ok(Params {
+            ty,
+            bytes,
+            align,
+            debug,
+        })
+    }
+}
 
-            if ident != "debug" {
-                return Err(syn::Error::new(ident.span(), "unknown argument"));
+enum Param {
+    Type(syn::Type, usize),
+    Bytes(usize),
+    Align(usize),
+    Debug(bool),
+}
+
+impl Parse for Param {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ident = Ident::parse(input)?;
+        <Token![=]>::parse(input)?;
+
+        if ident == "ty" {
+            let ty = syn::Type::parse(input)?;
+            let (class, bits) = type_bits(&ty)?;
+            if class != TypeClass::Int {
+                return Err(syn::Error::new(input.span(), "unsupported type"));
             }
-            <Token![=]>::parse(input)?;
-
-            syn::LitBool::parse(input)?.value
+            Ok(Self::Type(ty, bits))
+        } else if ident == "bytes" {
+            Ok(Self::Bytes(syn::LitInt::parse(input)?.base10_parse()?))
+        } else if ident == "align" {
+            Ok(Self::Align(syn::LitInt::parse(input)?.base10_parse()?))
+        } else if ident == "debug" {
+            Ok(Self::Debug(syn::LitBool::parse(input)?.value))
         } else {
-            true
-        };
-
-        Ok(Params { bits, ty, debug })
+            Err(syn::Error::new(ident.span(), "unknown argument"))
+        }
     }
 }
 

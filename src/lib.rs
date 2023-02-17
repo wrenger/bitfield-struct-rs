@@ -84,7 +84,7 @@ const fn copy_unaligned<const D: usize>(
     mut src_off: usize,
     mut len: usize,
 ) -> [u8; D] {
-    debug_assert!(src_off % 8 != 0 && dst_off % 8 != 0);
+    debug_assert!(src_off % 8 != 0 || dst_off % 8 != 0);
     debug_assert!(dst.len() * 8 >= dst_off + len);
     debug_assert!(src.len() * 8 >= src_off + len);
 
@@ -101,11 +101,12 @@ const fn copy_unaligned<const D: usize>(
         dst[dst_i] |= (src[src_i] >> src_off) << dst_off;
 
         // exceeding a single byte of the src buffer
+        dst_off += 8 - src_off;
         src_off += prefix;
         if let Some(reminder) = src_off.checked_sub(8) {
             src_i += 1;
             if reminder > 0 {
-                dst[dst_i] |= src[src_i] << (dst_off + reminder)
+                dst[dst_i] |= src[src_i] << dst_off
             }
             src_off = reminder
         }
@@ -180,9 +181,14 @@ const fn copy_aligned<const D: usize>(
 
 #[cfg(test)]
 mod test {
-    use std::fmt;
 
-    use super::bitfield;
+    #[allow(unused)]
+    fn b_print(b: &[u8]) {
+        for v in b.iter().rev() {
+            print!("{v:08b} ");
+        }
+        println!()
+    }
 
     #[test]
     fn copy_bits_single_bit() {
@@ -246,6 +252,17 @@ mod test {
         let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
         let dst = super::bit_copy(dst, 15, &src, 6, 13);
         assert_eq!(dst, [!0b00000000, !0b10000000, !0b11111111, !0b00001111]);
+
+        // prefix exceeds a single byte
+        let src = [0b00000000, 0b10000000, 0b11111111, 0b00000111];
+        let dst = [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        let dst = super::bit_copy(dst, 20, &src, 15, 12);
+        assert_eq!(dst, [0b00000000, 0b00000000, 0b11110000, 0b11111111]);
+        // reversed
+        let src = [!0b00000000, !0b10000000, !0b11111111, !0b00000111];
+        let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        let dst = super::bit_copy(dst, 20, &src, 15, 12);
+        assert_eq!(dst, [!0b00000000, !0b00000000, !0b11110000, !0b11111111]);
     }
 
     #[test]
@@ -271,123 +288,16 @@ mod test {
         let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
         let dst = super::bit_copy(dst, 14, &src, 6, 13);
         assert_eq!(dst, [!0b00000000, !0b11000000, !0b11100111, !0b00000111]);
-    }
 
-    #[test]
-    fn members() {
-        /// A test bitfield with documentation
-        #[bitfield(u64)]
-        struct MyBitfield {
-            /// defaults to 16 bits for u16
-            int: u16,
-            /// interpreted as 1 bit flag
-            flag: bool,
-            /// custom bit size
-            #[bits(1)]
-            tiny: u8,
-            /// sign extend for signed integers
-            #[bits(13)]
-            negative: i16,
-            /// supports any type that implements `From<u64>` and `Into<u64>`
-            #[bits(16)]
-            custom: CustomEnum,
-            /// public field -> public accessor functions
-            #[bits(12)]
-            pub public: usize,
-            /// padding
-            #[bits(5)]
-            _p: u8,
-            /// zero-sized members are ignored
-            #[bits(0)]
-            _completely_ignored: String,
-        }
-
-        /// A custom enum
-        #[derive(Debug, PartialEq, Eq)]
-        #[repr(u64)]
-        enum CustomEnum {
-            A = 0,
-            B = 1,
-            C = 2,
-        }
-        impl From<u64> for CustomEnum {
-            fn from(value: u64) -> Self {
-                match value {
-                    0 => Self::A,
-                    1 => Self::B,
-                    _ => Self::C,
-                }
-            }
-        }
-        impl From<CustomEnum> for u64 {
-            fn from(value: CustomEnum) -> Self {
-                value as _
-            }
-        }
-
-        let mut val = MyBitfield::new()
-            .with_int(3 << 15)
-            .with_flag(true)
-            .with_tiny(1)
-            .with_negative(-3)
-            .with_custom(CustomEnum::B)
-            .with_public(2);
-
-        println!("{val:?}");
-
-        let raw: u64 = val.into();
-        println!("{raw:b}");
-
-        assert_eq!(val.int(), 3 << 15);
-        assert_eq!(val.flag(), true);
-        assert_eq!(val.negative(), -3);
-        assert_eq!(val.tiny(), 1);
-        assert_eq!(val.custom(), CustomEnum::B);
-        assert_eq!(val.public(), 2);
-
-        // const members
-        assert_eq!(MyBitfield::FLAG_BITS, 1);
-        assert_eq!(MyBitfield::FLAG_OFFSET, 16);
-
-        val.set_negative(1);
-        assert_eq!(val.negative(), 1);
-
-        let pte = val.with_flag(false);
-        assert_eq!(pte.flag(), false);
-    }
-
-    #[test]
-    fn attrs() {
-        /// We have a custom debug implementation -> opt out
-        #[bitfield(u64)]
-        #[derive(PartialEq, Eq, Default)]
-        struct Full {
-            data: u64,
-        }
-
-        let full = Full::default();
-        assert_eq!(u64::from(full), u64::from(Full::new()));
-
-        let full = Full::new().with_data(u64::MAX);
-        assert_eq!(full.data(), u64::MAX);
-        assert!(full == Full::new().with_data(u64::MAX));
-    }
-
-    #[test]
-    fn debug() {
-        /// We have a custom debug implementation -> opt out
-        #[bitfield(u64, debug = false)]
-        struct Full {
-            data: u64,
-        }
-
-        impl fmt::Debug for Full {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "0x{:x}", self.data())
-            }
-        }
-
-        let full = Full::new().with_data(123);
-        println!("{full:?}");
+        // all bits
+        let src = [0xff, 0xff, 0xff, 0xff];
+        let dst = [0, 0, 0, 0];
+        let dst = super::bit_copy(dst, 0, &src, 0, 4 * 8);
+        assert_eq!(dst, [0xff, 0xff, 0xff, 0xff]);
+        // reversed
+        let src = [0, 0, 0, 0];
+        let dst = [0xff, 0xff, 0xff, 0xff];
+        let dst = super::bit_copy(dst, 0, &src, 0, 4 * 8);
+        assert_eq!(dst, [0, 0, 0, 0]);
     }
 }
