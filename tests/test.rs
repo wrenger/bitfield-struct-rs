@@ -55,6 +55,9 @@ fn members() {
         }
     }
 
+    assert_eq!(align_of::<MyBitfield>(), 8);
+    assert_eq!(size_of::<MyBitfield>(), 8);
+
     let mut val = MyBitfield::new()
         .with_int(3 << 15)
         .with_flag(true)
@@ -129,7 +132,6 @@ fn debug() {
 
 #[test]
 fn custom_size() {
-    /// We have a custom debug implementation -> opt out
     #[bitfield(bytes = 9)]
     struct NoTy {
         data: u64,
