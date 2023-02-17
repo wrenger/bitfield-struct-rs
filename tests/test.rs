@@ -145,3 +145,17 @@ fn custom_size() {
     assert_eq!(size_of::<NoTy>(), 9);
     println!("{full:?}");
 }
+
+#[test]
+fn no_args() {
+    #[bitfield]
+    struct NoArgs {
+        data: u8,
+    }
+
+    let full = NoArgs::new().with_data(123);
+    assert_eq!(full.data(), 123);
+    assert_eq!(align_of::<NoArgs>(), 1);
+    assert_eq!(size_of::<NoArgs>(), 1);
+    println!("{full:?}");
+}

@@ -9,12 +9,12 @@ use syn::Token;
 /// Creates a bitfield for this struct.
 ///
 /// Integer bitfields start with the `ty` argument followed by an integer type.
-/// The size and alignment are copied from the integer type, but can be overwritten.
-/// The can be omitted if you want to specify the size and alignment of the bitfield manually.
+/// The size and alignment are copied from the integer type but can be overwritten.
+/// The `ty` argument can be omitted if you want to specify the size and alignment of the bitfield manually.
 ///
 /// For example: `#[bitfield(ty = u64)]`.
 ///
-/// The other arguments, this macro accepts are:
+/// The other arguments for this macro accepts are:
 /// - `bytes`: The byte size of the bitfield (default: 1)
 /// - `align`: The alignment of the bitfield (default: 1)
 /// - `debug`: Whether or not the fmt::Debug trait should be generated (default: true)
