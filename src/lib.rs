@@ -225,7 +225,6 @@
 //! ```
 //!
 
-
 pub use bitfield_struct_derive::bitfield;
 
 /// The heart of the bitfield macro.

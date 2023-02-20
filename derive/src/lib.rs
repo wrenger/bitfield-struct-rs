@@ -14,7 +14,7 @@ use syn::Token;
 ///
 /// For example: `#[bitfield(ty = u64)]`.
 ///
-/// The other arguments for this macro accepts are:
+/// The other arguments for this macro are:
 /// - `bytes`: The byte size of the bitfield (default: 1)
 /// - `align`: The alignment of the bitfield (default: 1)
 /// - `debug`: Whether or not the fmt::Debug trait should be generated (default: true)
