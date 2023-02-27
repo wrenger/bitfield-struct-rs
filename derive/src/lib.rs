@@ -3,20 +3,22 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote, ToTokens};
 use std::stringify;
 use syn::parse::{Parse, ParseStream};
+use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::Token;
 
 /// Creates a bitfield for this struct.
 ///
-/// Integer bitfields start with the `ty` argument followed by an integer type.
-/// The size and alignment are copied from the integer type but can be overwritten.
-/// The `ty` argument can be omitted if you want to specify the size and alignment of the bitfield manually.
+/// There are two ways to specify the size and alignment of the bitfield:
 ///
-/// For example: `#[bitfield(ty = u64)]`.
+/// - Integer type: `#[bitfield(u32)]`
+///   - All explicitly sized integers are supported
+///   - The alignment defaults to the alignment of the integer if not otherwise specified
+/// - Bytes argument: `#[bitfield(bytes = 3)]`
+///   - The default alignment is 1
 ///
-/// The other arguments for this macro are:
-/// - `bytes`: The byte size of the bitfield (default: 1)
-/// - `align`: The alignment of the bitfield (default: 1)
+/// The macro two optional arguments
+/// - `align`: Specifies the alignment of the bitfield
 /// - `debug`: Whether or not the fmt::Debug trait should be generated (default: true)
 ///
 /// For example: `#[bitfield(bytes = 6, align = 2, debug = false)]`
@@ -35,7 +37,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         align,
         debug,
         ty,
-    } = syn::parse2::<Params>(args).map_err(|e| unsupported_param(e, input.span()))?;
+    } = syn::parse2::<Params>(args)?;
 
     let bits = bytes * 8;
     let span = input.fields.span();
@@ -411,28 +413,33 @@ struct Params {
 
 impl Parse for Params {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut bytes = 1;
         let mut align = 1;
         let mut debug = true;
         let mut ty = None;
 
-        let params = syn::punctuated::Punctuated::<Param, Token![,]>::parse_terminated(input)?;
-        for (i, param) in params.into_iter().enumerate() {
-            match param {
-                Param::Type(t, bits) => {
-                    if i != 0 {
-                        return Err(syn::Error::new(
-                            input.span(),
-                            "the `ty` argument has to be the first",
-                        ));
-                    }
-                    ty = Some(t);
-                    bytes = bits / 8;
-                    align = bits / 8;
+        let bytes = if input.peek2(Token![=]) && input.peek(syn::Ident) {
+            Bytes::parse(input)?.bytes
+        } else {
+            let t = syn::Type::parse(input)?;
+            let (class, bits) = type_bits(&t)?;
+            if class != TypeClass::Int {
+                return Err(syn::Error::new(
+                    input.span(),
+                    "Invalid argument or type, expecting `bytes` or an integer type",
+                ));
+            }
+            ty = Some(t);
+            align = bits / 8;
+            bits / 8
+        };
+
+        if let Ok(_) = <Token![,]>::parse(input) {
+            let params = Punctuated::<Param, Token![,]>::parse_terminated(input)?;
+            for param in params {
+                match param {
+                    Param::Align(a) => align = a,
+                    Param::Debug(d) => debug = d,
                 }
-                Param::Bytes(b) => bytes = b,
-                Param::Align(a) => align = a,
-                Param::Debug(d) => debug = d,
             }
         }
 
@@ -445,9 +452,27 @@ impl Parse for Params {
     }
 }
 
+struct Bytes {
+    bytes: usize,
+}
+
+impl Parse for Bytes {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ident = Ident::parse(input)?;
+        if ident != "bytes" {
+            return Err(syn::Error::new(
+                ident.span(),
+                "Invalid argument, expecting `bytes` or an integer type",
+            ));
+        }
+        <Token![=]>::parse(input)?;
+        Ok(Self {
+            bytes: syn::LitInt::parse(input)?.base10_parse()?,
+        })
+    }
+}
+
 enum Param {
-    Type(syn::Type, usize),
-    Bytes(usize),
     Align(usize),
     Debug(bool),
 }
@@ -455,18 +480,10 @@ enum Param {
 impl Parse for Param {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let ident = Ident::parse(input)?;
+
         <Token![=]>::parse(input)?;
 
-        if ident == "ty" {
-            let ty = syn::Type::parse(input)?;
-            let (class, bits) = type_bits(&ty)?;
-            if class != TypeClass::Int {
-                return Err(syn::Error::new(input.span(), "unsupported type"));
-            }
-            Ok(Self::Type(ty, bits))
-        } else if ident == "bytes" {
-            Ok(Self::Bytes(syn::LitInt::parse(input)?.base10_parse()?))
-        } else if ident == "align" {
+        if ident == "align" {
             Ok(Self::Align(syn::LitInt::parse(input)?.base10_parse()?))
         } else if ident == "debug" {
             Ok(Self::Debug(syn::LitBool::parse(input)?.value))
@@ -474,17 +491,6 @@ impl Parse for Param {
             Err(syn::Error::new(ident.span(), "unknown argument"))
         }
     }
-}
-
-fn unsupported_param<T>(mut e: syn::Error, arg: T) -> syn::Error
-where
-    T: syn::spanned::Spanned,
-{
-    e.combine(syn::Error::new(
-        arg.span(),
-        "unsupported #[bitfield] argument",
-    ));
-    e
 }
 
 #[cfg(test)]
@@ -496,15 +502,27 @@ mod test {
     #[test]
     fn parse_args() {
         let args = quote! {
+            bytes = 3
+        };
+        let params = syn::parse2::<Params>(args).unwrap();
+        assert!(params.bytes == 3 && params.debug == true);
+
+        let args = quote! {
+            bytes = 3, align = 2, debug = false
+        };
+        let params = syn::parse2::<Params>(args).unwrap();
+        assert!(params.bytes == 3 && params.align == 2 && params.debug == false);
+
+        let args = quote! {
             u64
         };
         let params = syn::parse2::<Params>(args).unwrap();
-        assert!(params.bits == u64::BITS as usize && params.debug == true);
+        assert!(params.bytes == 8 && params.debug == true);
 
         let args = quote! {
             u32, debug = false
         };
         let params = syn::parse2::<Params>(args).unwrap();
-        assert!(params.bits == u32::BITS as usize && params.debug == false);
+        assert!(params.bytes == 4 && params.debug == false);
     }
 }

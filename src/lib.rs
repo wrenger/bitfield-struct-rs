@@ -40,7 +40,7 @@
 //! ```
 //! # use bitfield_struct::bitfield;
 //! /// Define your type like this with the bitfield attribute
-//! #[bitfield(ty = u8)]
+//! #[bitfield(u8)]
 //! struct MyByte {
 //!     /// The first field occupies the least significant bits
 //!     #[bits(4)]
@@ -73,7 +73,7 @@
 //! ```
 //! # use bitfield_struct::bitfield;
 //! /// A test bitfield with documentation
-//! #[bitfield(ty = u64)]
+//! #[bitfield(u64, align = 4)] // <- Set a specific alignment (defaults to the integers alignment)
 //! #[derive(PartialEq, Eq)] // <- Attributes after `bitfield` are carried over
 //! struct MyBitfield {
 //!     /// defaults to 16 bits for u16
@@ -209,7 +209,7 @@
 //! # use std::fmt;
 //! # use bitfield_struct::bitfield;
 //!
-//! #[bitfield(ty = u64, debug = false)]
+//! #[bitfield(u64, debug = false)]
 //! struct CustomDebug {
 //!     data: u64
 //! }

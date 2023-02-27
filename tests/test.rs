@@ -6,7 +6,7 @@ use bitfield_struct::bitfield;
 #[test]
 fn members() {
     /// A test bitfield with documentation
-    #[bitfield(ty = u64)]
+    #[bitfield(u64)]
     struct MyBitfield {
         /// defaults to 16 bits for u16
         int: u16,
@@ -98,7 +98,7 @@ fn members() {
 #[test]
 fn attrs() {
     /// We have a custom debug implementation -> opt out
-    #[bitfield(ty = u64)]
+    #[bitfield(u64)]
     #[derive(PartialEq, Eq, Default)]
     struct Full {
         data: u64,
@@ -115,7 +115,7 @@ fn attrs() {
 #[test]
 fn debug() {
     /// We have a custom debug implementation -> opt out
-    #[bitfield(ty = u64, debug = false)]
+    #[bitfield(u64, debug = false)]
     struct Full {
         data: u64,
     }
@@ -143,19 +143,5 @@ fn custom_size() {
     assert_eq!(full.extra(), 255);
     assert_eq!(align_of::<NoTy>(), 1);
     assert_eq!(size_of::<NoTy>(), 9);
-    println!("{full:?}");
-}
-
-#[test]
-fn no_args() {
-    #[bitfield]
-    struct NoArgs {
-        data: u8,
-    }
-
-    let full = NoArgs::new().with_data(123);
-    assert_eq!(full.data(), 123);
-    assert_eq!(align_of::<NoArgs>(), 1);
-    assert_eq!(size_of::<NoArgs>(), 1);
     println!("{full:?}");
 }
