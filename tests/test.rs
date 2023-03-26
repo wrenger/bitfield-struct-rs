@@ -1,4 +1,5 @@
 use std::fmt;
+use std::mem::{align_of, size_of};
 
 use bitfield_struct::bitfield;
 
@@ -33,26 +34,29 @@ fn members() {
 
     /// A custom enum
     #[derive(Debug, PartialEq, Eq)]
-    #[repr(u64)]
+    #[repr(u8)]
     enum CustomEnum {
         A = 0,
         B = 1,
         C = 2,
     }
-    impl From<u64> for CustomEnum {
-        fn from(value: u64) -> Self {
-            match value {
+    impl From<[u8; 2]> for CustomEnum {
+        fn from(value: [u8; 2]) -> Self {
+            match value[0] {
                 0 => Self::A,
                 1 => Self::B,
                 _ => Self::C,
             }
         }
     }
-    impl From<CustomEnum> for u64 {
+    impl From<CustomEnum> for [u8; 2] {
         fn from(value: CustomEnum) -> Self {
-            value as _
+            [value as _, 0]
         }
     }
+
+    assert_eq!(align_of::<MyBitfield>(), 8);
+    assert_eq!(size_of::<MyBitfield>(), 8);
 
     let mut val = MyBitfield::new()
         .with_int(3 << 15)
@@ -60,19 +64,25 @@ fn members() {
         .with_tiny(1)
         .with_negative(-3)
         .with_custom(CustomEnum::B)
-        .with_public(2);
+        .with_public((1 << MyBitfield::PUBLIC_BITS) - 1);
 
     println!("{val:?}");
 
     let raw: u64 = val.into();
     println!("{raw:b}");
 
+    let raw: [u8; 8] = val.into();
+    for v in raw {
+        print!("{v:08b} ");
+    }
+    println!();
+
     assert_eq!(val.int(), 3 << 15);
     assert_eq!(val.flag(), true);
     assert_eq!(val.negative(), -3);
     assert_eq!(val.tiny(), 1);
     assert_eq!(val.custom(), CustomEnum::B);
-    assert_eq!(val.public(), 2);
+    assert_eq!(val.public(), (1 << MyBitfield::PUBLIC_BITS) - 1);
 
     // const members
     assert_eq!(MyBitfield::FLAG_BITS, 1);
@@ -117,5 +127,21 @@ fn debug() {
     }
 
     let full = Full::new().with_data(123);
+    println!("{full:?}");
+}
+
+#[test]
+fn custom_size() {
+    #[bitfield(bytes = 9)]
+    struct NoTy {
+        data: u64,
+        extra: u8,
+    }
+
+    let full = NoTy::new().with_data(123).with_extra(255);
+    assert_eq!(full.data(), 123);
+    assert_eq!(full.extra(), 255);
+    assert_eq!(align_of::<NoTy>(), 1);
+    assert_eq!(size_of::<NoTy>(), 9);
     println!("{full:?}");
 }

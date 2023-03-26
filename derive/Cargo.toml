@@ -1,5 +1,5 @@
 [package]
-name = "bitfield-struct"
+name = "bitfield-struct-derive"
 version = "0.3.2"
 edition = "2021"
 authors = ["Lars Wrenger <lars@wrenger.net>"]
@@ -10,8 +10,10 @@ repository = "https://github.com/wrenger/bitfield-struct-rs.git"
 readme = "README.md"
 license = "MIT"
 
+[lib]
+proc-macro = true
+
 [dependencies]
-bitfield-struct-derive = { version = "0.3.2", path = "derive" }
 quote = "1.0"
 syn = { version = "1.0", features = ["full"] }
 proc-macro2 = "1.0"

@@ -73,7 +73,7 @@
 //! ```
 //! # use bitfield_struct::bitfield;
 //! /// A test bitfield with documentation
-//! #[bitfield(u64)]
+//! #[bitfield(u64, align = 4)] // <- Set a specific alignment (defaults to the integers alignment)
 //! #[derive(PartialEq, Eq)] // <- Attributes after `bitfield` are carried over
 //! struct MyBitfield {
 //!     /// defaults to 16 bits for u16
@@ -102,25 +102,25 @@
 //!
 //! /// A custom enum
 //! #[derive(Debug, PartialEq, Eq)]
-//! #[repr(u64)]
+//! #[repr(u8)]
 //! enum CustomEnum {
 //!     A = 0,
 //!     B = 1,
 //!     C = 2,
 //! }
-//! // implement `From<u64>` and `Into<u64>` for `CustomEnum`!
-//! # impl From<u64> for CustomEnum {
-//! #     fn from(value: u64) -> Self {
-//! #         match value {
+//! // implement `From<[u8; 2]>` and `Into<[u8; 2]>` for `CustomEnum`!
+//! # impl From<[u8; 2]> for CustomEnum {
+//! #     fn from(value: [u8; 2]) -> Self {
+//! #         match value[0] {
 //! #             0 => Self::A,
 //! #             1 => Self::B,
 //! #             _ => Self::C,
 //! #         }
 //! #     }
 //! # }
-//! # impl From<CustomEnum> for u64 {
+//! # impl From<CustomEnum> for [u8; 2] {
 //! #     fn from(value: CustomEnum) -> Self {
-//! #         value as _
+//! #         [value as _, 0]
 //! #     }
 //! # }
 //!
@@ -159,9 +159,9 @@
 //!
 //! ```ignore
 //! // generated struct
-//! struct MyBitfield(u64);
+//! struct MyBitfield([u8; 8]);
 //! impl MyBitfield {
-//!     const fn new() -> Self { Self(0) }
+//!     const fn new() -> Self { Self([0; 8]) }
 //!
 //!     const INT_BITS: usize = 16;
 //!     const INT_OFFSET: usize = 0;
@@ -173,12 +173,31 @@
 //!     // other field ...
 //! }
 //! // generated trait implementations
+//! impl From<[u8; 8]> for MyBitfield { /* ... */ }
+//! impl From<MyBitfield> for [u8; 8] { /* ... */ }
+//! // from the `ty` parameter
 //! impl From<u64> for MyBitfield { /* ... */ }
 //! impl From<MyBitfield> for u64 { /* ... */ }
 //! impl Debug for MyBitfield { /* ... */ }
 //! ```
 //!
 //! > Hint: You can use the rust-analyzer "Expand macro recursively" action to view the generated code.
+//!
+//! ## No-type bitfields
+//!
+//! Instead of specifying a base type, you can manually define the `size` and `align` of the bitfield.
+//!
+//! ```
+//! # use bitfield_struct::bitfield;
+//! # use std::mem::{size_of, align_of};
+//! #[bitfield(bytes = 9)]
+//! struct NoTy {
+//!     data: u64,
+//!     extra: u8,
+//! }
+//! assert_eq!(size_of::<NoTy>(), 9);
+//! assert_eq!(align_of::<NoTy>(), 1); // align defaults to 1
+//! ```
 //!
 //! ## `fmt::Debug`
 //!
@@ -206,439 +225,321 @@
 //! ```
 //!
 
-use proc_macro as pc;
-use proc_macro2::{Ident, Span, TokenStream};
-use quote::{format_ident, quote, ToTokens};
-use std::stringify;
-use syn::parse::{Parse, ParseStream};
-use syn::spanned::Spanned;
-use syn::Token;
+pub use bitfield_struct_derive::bitfield;
 
-/// Creates a bitfield for this struct.
+/// The heart of the bitfield macro.
+/// It copies bits (with different offsets) from `src` to `dst`.
 ///
-/// The arguments first, have to begin with the underlying type of the bitfield:
-/// For example: `#[bitfield(u64)]`.
+/// This function is used both for the getters and setters of the bitfield struct.
 ///
-/// It can contain an extra `debug` argument for disabling the `Debug` trait
-/// generation (`#[bitfield(u64, debug = false)]`).
-#[proc_macro_attribute]
-pub fn bitfield(args: pc::TokenStream, input: pc::TokenStream) -> pc::TokenStream {
-    match bitfield_inner(args.into(), input.into()) {
-        Ok(result) => result.into(),
-        Err(e) => e.into_compile_error().into(),
-    }
-}
+///  General idea:
+/// - Copy prefix bits
+/// - Copy aligned u8
+/// - Copy suffix bits
+///
+/// Possible future optimization:
+/// - Copy and shift with larger instructions (u16/u32/u64) if the buffers are large enough
+///
+/// FIXME: Use mutable reference as soon as `const_mut_refs` is stable
+#[inline(always)]
+pub const fn bit_copy<const D: usize>(
+    mut dst: [u8; D],
+    dst_off: usize,
+    src: &[u8],
+    src_off: usize,
+    len: usize,
+) -> [u8; D] {
+    debug_assert!(len > 0);
+    debug_assert!(dst.len() * 8 >= dst_off + len);
+    debug_assert!(src.len() * 8 >= src_off + len);
 
-fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
-    let input = syn::parse2::<syn::ItemStruct>(input)?;
-    let Params { ty, bits, debug } =
-        syn::parse2::<Params>(args).map_err(|e| unsupported_param(e, input.span()))?;
-
-    let span = input.fields.span();
-    let name = input.ident;
-    let name_str = name.to_string();
-    let vis = input.vis;
-    let attrs: TokenStream = input.attrs.iter().map(ToTokens::to_token_stream).collect();
-
-    let syn::Fields::Named(fields) = input.fields else {
-        return Err(syn::Error::new(span, "only named fields are supported"));
-    };
-
-    let mut offset = 0;
-    let mut members = Vec::with_capacity(fields.named.len());
-    for field in fields.named {
-        let f = Member::new(ty.clone(), field, offset)?;
-        offset += f.bits;
-        members.push(f);
-    }
-
-    if offset < bits {
-        return Err(syn::Error::new(
-            span,
-            format!(
-                "The bitfiled size ({bits} bits) has to be equal to the sum of its members ({offset} bits)!. \
-                You might have to add padding (a {} bits large member prefixed with \"_\").",
-                bits - offset
-            ),
-        ));
-    }
-    if offset > bits {
-        return Err(syn::Error::new(
-            span,
-            format!(
-                "The size of the members ({offset} bits) is larger than the type ({bits} bits)!."
-            ),
-        ));
-    }
-
-    let debug_impl = if debug {
-        let debug_fields = members.iter().map(|m| m.debug());
-        quote! {
-            impl core::fmt::Debug for #name {
-                fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                    f.debug_struct(#name_str)
-                        #( #debug_fields )*
-                        .finish()
-                }
-            }
-        }
+    if len == 1 {
+        let dst_i = dst_off / 8;
+        dst[dst_i] = single_bit(dst[dst_i], dst_off % 8, src, src_off);
+        dst
+    } else if len < (8 - (dst_off % 8)) {
+        // edge case if there are less then one byte to be copied
+        let dst_i = dst_off / 8;
+        dst[dst_i] = single_byte(dst[dst_i], dst_off % 8, src, src_off, len);
+        dst
+    } else if dst_off % 8 == src_off % 8 {
+        copy_aligned(dst, dst_off / 8, src, src_off / 8, dst_off % 8, len)
     } else {
-        Default::default()
-    };
+        copy_unaligned(dst, dst_off, src, src_off, len)
+    }
+}
 
-    // The size of isize and usize is architecture dependent and not known for proc_macros,
-    // thus we have to check it with const asserts.
-    let const_asserts = members.iter().filter_map(|m| {
-        if m.class == TypeClass::SizeInt {
-            let bits = m.bits;
-            let msg = format!("overflowing field type of '{}'", m.ident);
-            Some(quote!(
-                const _: () = assert!(#bits <= 8 * std::mem::size_of::<usize>(), #msg);
-            ))
-        } else {
-            None
-        }
-    });
+/// Test if this bit is set
+#[inline(always)]
+pub const fn is_bit_set(src: &[u8], i: usize) -> bool {
+    debug_assert!(i < src.len() * 8);
+    (src[i / 8] >> (i % 8)) & 1 != 0
+}
 
-    Ok(quote! {
-        #attrs
-        #[derive(Copy, Clone)]
-        #[repr(transparent)]
-        #vis struct #name(#ty);
+/// Only a single bit is copied
+#[inline(always)]
+const fn single_bit(dst: u8, dst_off: usize, src: &[u8], src_off: usize) -> u8 {
+    debug_assert!(dst_off < 8);
+    if is_bit_set(src, src_off) {
+        dst | (1 << dst_off)
+    } else {
+        dst & !(1 << dst_off)
+    }
+}
 
-        impl #name {
-            #vis const fn new() -> Self {
-                Self(0)
+/// We have only one destination byte.
+#[inline(always)]
+const fn single_byte(dst: u8, dst_off: usize, src: &[u8], src_off: usize, len: usize) -> u8 {
+    const MAX: u8 = u8::MAX;
+    const BITS: usize = u8::BITS as _;
+
+    debug_assert!(dst_off < BITS);
+
+    let src_i = src_off / BITS;
+    let src_off = src_off % BITS;
+
+    let mask = (MAX >> (BITS - len)) << dst_off;
+    let mut dst = dst & !mask;
+    dst |= ((src[src_i] >> src_off) << dst_off) & mask;
+
+    // exceeding a single byte of the src buffer
+    if len + src_off > BITS {
+        dst |= (src[src_i + 1] << (BITS - src_off + dst_off)) & mask;
+    }
+    dst
+}
+
+/// The buffers have different bit offsets
+#[inline(always)]
+const fn copy_unaligned<const D: usize>(
+    mut dst: [u8; D],
+    mut dst_off: usize,
+    src: &[u8],
+    mut src_off: usize,
+    mut len: usize,
+) -> [u8; D] {
+    const MAX: u8 = u8::MAX;
+    const BITS: usize = u8::BITS as _;
+
+    debug_assert!(src_off % BITS != 0 || dst_off % BITS != 0);
+    debug_assert!(dst.len() * BITS >= dst_off + len);
+    debug_assert!(src.len() * BITS >= src_off + len);
+
+    let mut dst_i = dst_off / BITS;
+    dst_off %= BITS;
+    let mut src_i = src_off / BITS;
+    src_off %= BITS;
+
+    // copy dst prefix -> byte-align dst
+    if dst_off > 0 {
+        let prefix = BITS - dst_off;
+        let mask = MAX << dst_off;
+        dst[dst_i] &= !mask;
+        dst[dst_i] |= (src[src_i] >> src_off) << dst_off;
+
+        // exceeding a single byte of the src buffer
+        dst_off += BITS - src_off;
+        src_off += prefix;
+        if let Some(reminder) = src_off.checked_sub(BITS) {
+            src_i += 1;
+            if reminder > 0 {
+                dst[dst_i] |= src[src_i] << dst_off
             }
-
-            #( #members )*
+            src_off = reminder
         }
-
-        impl From<#ty> for #name {
-            fn from(v: #ty) -> Self {
-                Self(v)
-            }
-        }
-        impl From<#name> for #ty {
-            fn from(v: #name) -> #ty {
-                v.0
-            }
-        }
-
-        #( #const_asserts )*
-
-        #debug_impl
-    })
-}
-
-/// Distinguish between different types for code generation.
-///
-/// We need this to make accessor functions for bool and ints const.
-/// As soon as we have const conversion traits, we can simply switch to `TryFrom` and don't have to generate different code.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum TypeClass {
-    /// Booleans with 1 bit size
-    Bool,
-    /// Ints with fixes sizes: u8, u64, ...
-    Int,
-    /// Ints with architecture dependend sizes: usize, isize
-    SizeInt,
-    /// Custom types
-    Other,
-}
-
-struct Member {
-    base_ty: syn::Type,
-    attrs: Vec<syn::Attribute>,
-    ty: syn::Type,
-    class: TypeClass,
-    bits: usize,
-    ident: syn::Ident,
-    vis: syn::Visibility,
-    offset: usize,
-}
-
-impl Member {
-    fn new(base_ty: syn::Type, f: syn::Field, offset: usize) -> syn::Result<Self> {
-        let span = f.span();
-
-        let syn::Field {
-            mut attrs,
-            vis,
-            ident,
-            ty,
-            ..
-        } = f;
-
-        let ident = ident.ok_or_else(|| syn::Error::new(span, "Not supported"))?;
-
-        let (class, bits) = bits(&attrs, &ty)?;
-        // remove our attribute
-        attrs.retain(|a| !a.path.is_ident("bits"));
-
-        Ok(Self {
-            base_ty,
-            attrs,
-            ty,
-            class,
-            bits,
-            ident,
-            vis,
-            offset,
-        })
+        dst_i += 1;
+        len -= prefix;
     }
 
-    fn debug(&self) -> TokenStream {
-        let ident_str = self.ident.to_string();
-        if self.bits > 0 && !ident_str.starts_with('_') {
-            let ident = &self.ident;
-            quote!(.field(#ident_str, &self.#ident()))
-        } else {
-            Default::default()
+    // copy middle
+    let mut i = 0;
+    while i < len / BITS {
+        dst[dst_i + i] = (src[src_i + i] >> src_off) | (src[src_i + i + 1] << (BITS - src_off));
+        i += 1;
+    }
+
+    // suffix
+    let suffix = len % BITS;
+    if suffix > 0 {
+        let last = len / BITS;
+        let mask = MAX >> (BITS - suffix);
+        dst[dst_i + last] &= !mask;
+        dst[dst_i + last] |= src[src_i + last] >> src_off;
+
+        // exceeding a single byte of the src buffer
+        if suffix + src_off > BITS {
+            dst[dst_i + last] |= (src[src_i + last + 1] << (BITS - src_off)) & mask;
         }
     }
+    dst
 }
 
-impl ToTokens for Member {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let Self {
-            base_ty,
-            attrs,
-            ty,
-            class,
-            bits,
-            ident,
-            vis,
-            offset,
-        } = self;
-        let ident_str = ident.to_string();
+/// The buffers have the same bit offsets
+#[inline(always)]
+const fn copy_aligned<const D: usize>(
+    mut dst: [u8; D],
+    mut dst_i: usize,
+    src: &[u8],
+    mut src_i: usize,
+    off: usize,
+    mut len: usize,
+) -> [u8; D] {
+    const MAX: u8 = u8::MAX;
+    const BITS: usize = u8::BITS as _;
 
-        // Skip zero sized and padding members
-        if self.bits == 0 || ident_str.starts_with('_') {
-            return Default::default();
-        }
+    debug_assert!(off < BITS);
+    debug_assert!(dst.len() * BITS >= dst_i * BITS + len);
+    debug_assert!(src.len() * BITS >= src_i * BITS + len);
 
-        let with_ident = format_ident!("with_{ident}");
-        let set_ident = format_ident!("set_{ident}");
-        let bits_ident = format_ident!("{}_BITS", ident_str.to_uppercase());
-        let offset_ident = format_ident!("{}_OFFSET", ident_str.to_uppercase());
+    // copy prefix -> byte-align dst
+    if off > 0 {
+        let prefix = BITS - (off % BITS);
+        let mask = MAX << (off % BITS);
+        dst[dst_i] &= !mask;
+        dst[dst_i] |= src[src_i] & mask;
 
-        let location = format!("\n\nBits: {offset}..{}", offset + bits);
-
-        let doc: TokenStream = attrs
-            .iter()
-            .filter(|a| !a.path.is_ident("bits"))
-            .map(ToTokens::to_token_stream)
-            .collect();
-
-        let general = quote! {
-            const #bits_ident: usize = #bits;
-            const #offset_ident: usize = #offset;
-
-            #doc
-            #[doc = #location]
-            #vis fn #set_ident(&mut self, value: #ty) {
-                *self = self.#with_ident(value);
-            }
-        };
-
-        let mask: u128 = !0 >> (u128::BITS as usize - bits);
-        let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
-
-        let code = match class {
-            TypeClass::Bool => quote! {
-                #general
-
-                #doc
-                #[doc = #location]
-                #vis const fn #with_ident(self, value: #ty) -> Self {
-                    Self(self.0 & !(1 << #offset) | (value as #base_ty) << #offset)
-                }
-                #doc
-                #[doc = #location]
-                #vis const fn #ident(&self) -> #ty {
-                    ((self.0 >> #offset) & 1) != 0
-                }
-            },
-            TypeClass::Int | TypeClass::SizeInt => quote! {
-                #general
-
-                #doc
-                #[doc = #location]
-                #vis const fn #with_ident(self, value: #ty) -> Self {
-                    debug_assert!(value <= #mask);
-                    Self(self.0 & !(#mask << #offset) | (value as #base_ty & #mask) << #offset)
-                }
-                #doc
-                #[doc = #location]
-                #vis const fn #ident(&self) -> #ty {
-                    let shift = #ty::BITS as usize - #bits;
-                    (((self.0 >> #offset) as #ty) << shift) >> shift
-                }
-            },
-            TypeClass::Other => quote! {
-                #general
-
-                #doc
-                #[doc = #location]
-                #vis fn #with_ident(self, value: #ty) -> Self {
-                    let value: #base_ty = value.into();
-                    debug_assert!(value <= #mask);
-                    Self(self.0 & !(#mask << #offset) | (value & #mask) << #offset)
-                }
-                #doc
-                #[doc = #location]
-                #vis fn #ident(&self) -> #ty {
-                    let shift = #base_ty::BITS as usize - #bits;
-                    (((self.0 >> #offset) << shift) >> shift).into()
-                }
-            },
-        };
-        tokens.extend(code);
-    }
-}
-
-/// Parses the `bits` attribute that allows specifying a custom number of bits.
-fn bits(attrs: &[syn::Attribute], ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
-    fn malformed(mut e: syn::Error, attr: &syn::Attribute) -> syn::Error {
-        e.combine(syn::Error::new(attr.span(), "malformed #[bits] attribute"));
-        e
+        src_i += 1;
+        dst_i += 1;
+        len -= prefix;
     }
 
-    for attr in attrs {
-        match attr {
-            syn::Attribute {
-                style: syn::AttrStyle::Outer,
-                path,
-                tokens,
-                ..
-            } if path.is_ident("bits") => {
-                let bits = attr
-                    .parse_args::<syn::LitInt>()
-                    .map_err(|e| malformed(e, attr))?
-                    .base10_parse()
-                    .map_err(|e| malformed(e, attr))?;
-
-                return if bits == 0 {
-                    Ok((TypeClass::Other, 0))
-                } else if let Ok((class, size)) = type_bits(ty) {
-                    if bits <= size {
-                        Ok((class, bits))
-                    } else {
-                        Err(syn::Error::new(tokens.span(), "overflowing field type"))
-                    }
-                } else if matches!(ty, syn::Type::Path(syn::TypePath{ path, .. })
-                    if path.is_ident("usize") || path.is_ident("isize"))
-                {
-                    // isize and usize are supported but types size is not known at this point!
-                    // Meaning that they must have a bits attribute explicitly defining their size
-                    Ok((TypeClass::SizeInt, bits))
-                } else {
-                    Ok((TypeClass::Other, bits))
-                };
-            }
-            _ => {}
-        }
+    // copy middle
+    let mut i = 0;
+    while i < len / BITS {
+        dst[dst_i + i] = src[src_i + i];
+        i += 1;
     }
 
-    if let syn::Type::Path(syn::TypePath { path, .. }) = ty {
-        if path.is_ident("usize") || path.is_ident("isize") {
-            return Err(syn::Error::new(
-                ty.span(),
-                "isize and usize fields require the #[bits($1)] attribute",
-            ));
-        }
+    // copy suffix
+    let suffix = len % BITS;
+    if suffix > 0 {
+        let last = len / BITS;
+        let mask = MAX >> (BITS - suffix);
+        dst[dst_i + last] &= !mask;
+        dst[dst_i + last] |= src[src_i + last];
     }
-
-    // Fallback to type size
-    type_bits(ty)
-}
-
-/// Returns the number of bits for a given type
-fn type_bits(ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
-    let syn::Type::Path(syn::TypePath{ path, .. }) = ty else {
-        return Err(syn::Error::new(ty.span(), "unsupported type"))
-    };
-    let Some(ident) = path.get_ident() else {
-        return Err(syn::Error::new(ty.span(), "unsupported type"))
-    };
-    if ident == "bool" {
-        return Ok((TypeClass::Bool, 1));
-    }
-    macro_rules! integer {
-        ($ident:ident => $($ty:ident),*) => {
-            match ident {
-                $(_ if ident == stringify!($ty) => Ok((TypeClass::Int, $ty::BITS as _)),)*
-                _ => Err(syn::Error::new(ty.span(), "unsupported type"))
-            }
-        };
-    }
-    integer!(ident => u8, i8, u16, i16, u32, i32, u64, i64, u128, i128)
-}
-
-struct Params {
-    ty: syn::Type,
-    bits: usize,
-    debug: bool,
-}
-
-impl Parse for Params {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let Ok(ty) = syn::Type::parse(input) else {
-            return Err(syn::Error::new(input.span(), "unknown type"));
-        };
-        let (class, bits) = type_bits(&ty)?;
-        if class != TypeClass::Int {
-            return Err(syn::Error::new(input.span(), "unsupported type"));
-        }
-
-        // try parse additional debug arg
-        let debug = if <Token![,]>::parse(input).is_ok() {
-            let ident = Ident::parse(input)?;
-
-            if ident != "debug" {
-                return Err(syn::Error::new(ident.span(), "unknown argument"));
-            }
-            <Token![=]>::parse(input)?;
-
-            syn::LitBool::parse(input)?.value
-        } else {
-            true
-        };
-
-        Ok(Params { bits, ty, debug })
-    }
-}
-
-fn unsupported_param<T>(mut e: syn::Error, arg: T) -> syn::Error
-where
-    T: syn::spanned::Spanned,
-{
-    e.combine(syn::Error::new(
-        arg.span(),
-        "unsupported #[bitfield] argument",
-    ));
-    e
+    dst
 }
 
 #[cfg(test)]
 mod test {
-    use quote::quote;
 
-    use crate::Params;
+    #[allow(unused)]
+    fn b_print(b: &[u8]) {
+        for v in b.iter().rev() {
+            print!("{v:08b} ");
+        }
+        println!()
+    }
 
     #[test]
-    fn parse_args() {
-        let args = quote! {
-            u64
-        };
-        let params = syn::parse2::<Params>(args).unwrap();
-        assert!(params.bits == u64::BITS as usize && params.debug == true);
+    fn copy_bits_single_bit() {
+        // single byte
+        let src = [0b00100000];
+        let dst = [0b10111111];
+        let dst = super::bit_copy(dst, 6, &src, 5, 1);
+        assert_eq!(dst, [0b11111111]);
+        // reversed
+        let src = [!0b00100000];
+        let dst = [!0b10111111];
+        let dst = super::bit_copy(dst, 6, &src, 5, 1);
+        assert_eq!(dst, [!0b11111111]);
+    }
 
-        let args = quote! {
-            u32, debug = false
-        };
-        let params = syn::parse2::<Params>(args).unwrap();
-        assert!(params.bits == u32::BITS as usize && params.debug == false);
+    #[test]
+    fn copy_bits_single_byte() {
+        // single byte
+        let src = [0b00111000];
+        let dst = [0b10001111];
+        let dst = super::bit_copy(dst, 4, &src, 3, 3);
+        assert_eq!(dst, [0b11111111]);
+        // reversed
+        let src = [!0b00111000];
+        let dst = [!0b10001111];
+        let dst = super::bit_copy(dst, 4, &src, 3, 3);
+        assert_eq!(dst, [!0b11111111]);
+    }
+
+    #[test]
+    fn copy_bits_unaligned() {
+        // two to single byte
+        let src = [0b00000000, 0b11000000, 0b00000111, 0b00000000];
+        let dst = [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        let dst = super::bit_copy(dst, 17, &src, 14, 5);
+        assert_eq!(dst, [0b00000000, 0b00000000, 0b00111110, 0b0000000]);
+        // reversed
+        let src = [!0b00000000, !0b11000000, !0b00000111, !0b00000000];
+        let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        let dst = super::bit_copy(dst, 17, &src, 14, 5);
+        assert_eq!(dst, [!0b00000000, !0b00000000, !0b00111110, !0b0000000]);
+
+        // over two bytes
+        let src = [0b00000000, 0b11000000, 0b00000111, 0b00000000];
+        let dst = [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        let dst = super::bit_copy(dst, 23, &src, 14, 5);
+        assert_eq!(dst, [0b00000000, 0b00000000, 0b10000000, 0b00001111]);
+        // reversed
+        let src = [!0b00000000, !0b11000000, !0b00000111, !0b00000000];
+        let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        let dst = super::bit_copy(dst, 23, &src, 14, 5);
+        assert_eq!(dst, [!0b00000000, !0b00000000, !0b10000000, !0b00001111]);
+
+        // over three bytes
+        let src = [0b11000000, 0b11111111, 0b00000111, 0b00000000];
+        let dst = [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        let dst = super::bit_copy(dst, 15, &src, 6, 13);
+        assert_eq!(dst, [0b00000000, 0b10000000, 0b11111111, 0b00001111]);
+        // reversed
+        let src = [!0b11000000, !0b11111111, !0b00000111, !0b00000000];
+        let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        let dst = super::bit_copy(dst, 15, &src, 6, 13);
+        assert_eq!(dst, [!0b00000000, !0b10000000, !0b11111111, !0b00001111]);
+
+        // prefix exceeds a single byte
+        let src = [0b00000000, 0b10000000, 0b11111111, 0b00000111];
+        let dst = [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        let dst = super::bit_copy(dst, 20, &src, 15, 12);
+        assert_eq!(dst, [0b00000000, 0b00000000, 0b11110000, 0b11111111]);
+        // reversed
+        let src = [!0b00000000, !0b10000000, !0b11111111, !0b00000111];
+        let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        let dst = super::bit_copy(dst, 20, &src, 15, 12);
+        assert_eq!(dst, [!0b00000000, !0b00000000, !0b11110000, !0b11111111]);
+    }
+
+    #[test]
+    fn copy_bits_aligned() {
+        // over two bytes
+        let src = [0b00000000, 0b11000000, 0b00000111, 0b00000000];
+        let dst = [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        let dst = super::bit_copy(dst, 14, &src, 14, 5);
+        assert_eq!(dst, src);
+        // reversed
+        let src = [!0b00000000, !0b11000000, !0b00000111, !0b00000000];
+        let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        let dst = super::bit_copy(dst, 14, &src, 14, 5);
+        assert_eq!(dst, src);
+
+        // over three bytes
+        let src = [0b11000000, 0b11100111, 0b00000111, 0b00000000];
+        let dst = [0b00000000, 0b00000000, 0b00000000, 0b00000000];
+        let dst = super::bit_copy(dst, 14, &src, 6, 13);
+        assert_eq!(dst, [0b00000000, 0b11000000, 0b11100111, 0b00000111]);
+        // reversed
+        let src = [!0b11000000, !0b11100111, !0b00000111, !0b00000000];
+        let dst = [!0b00000000, !0b00000000, !0b00000000, !0b00000000];
+        let dst = super::bit_copy(dst, 14, &src, 6, 13);
+        assert_eq!(dst, [!0b00000000, !0b11000000, !0b11100111, !0b00000111]);
+
+        // all bits
+        let src = [0xff, 0xff, 0xff, 0xff];
+        let dst = [0, 0, 0, 0];
+        let dst = super::bit_copy(dst, 0, &src, 0, 4 * 8);
+        assert_eq!(dst, [0xff, 0xff, 0xff, 0xff]);
+        // reversed
+        let src = [0, 0, 0, 0];
+        let dst = [0xff, 0xff, 0xff, 0xff];
+        let dst = super::bit_copy(dst, 0, &src, 0, 4 * 8);
+        assert_eq!(dst, [0, 0, 0, 0]);
     }
 }
