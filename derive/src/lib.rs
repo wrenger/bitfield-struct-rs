@@ -5,7 +5,7 @@ use std::stringify;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::Token;
+use syn::{Error, Token};
 
 /// Creates a bitfield for this struct.
 ///
@@ -47,7 +47,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let attrs: TokenStream = input.attrs.iter().map(ToTokens::to_token_stream).collect();
 
     let syn::Fields::Named(fields) = input.fields else {
-        return Err(syn::Error::new(span, "only named fields are supported"));
+        return Err(Error::new(span, "only named fields are supported"));
     };
 
     let mut offset = 0;
@@ -59,9 +59,9 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     }
 
     if offset < bits {
-        return Err(syn::Error::new(
+        return Err(Error::new(
             span,
-            format!(
+            format_args!(
                 "The bitfiled size ({bits} bits) has to be equal to the sum of its members ({offset} bits)!. \
                 You might have to add padding (a {} bits large member prefixed with \"_\").",
                 bits - offset
@@ -69,9 +69,9 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         ));
     }
     if offset > bits {
-        return Err(syn::Error::new(
+        return Err(Error::new(
             span,
-            format!(
+            format_args!(
                 "The size of the members ({offset} bits) is larger than the type ({bits} bits)!."
             ),
         ));
@@ -193,7 +193,7 @@ impl Member {
             ..
         } = f;
 
-        let ident = ident.ok_or_else(|| syn::Error::new(span, "Not supported"))?;
+        let ident = ident.ok_or_else(|| Error::new(span, "Not supported"))?;
 
         let (class, bits) = bits(&attrs, &ty)?;
         // remove our attribute
@@ -287,22 +287,17 @@ impl ToTokens for Member {
                 #doc
                 #[doc = #location]
                 #vis const fn #with_ident(self, value: #ty) -> Self {
-                    #[cfg(target_endian = "little")]
-                    let src = value.to_le_bytes();
-                    #[cfg(target_endian = "big")]
-                    let src = value.to_be_bytes();
+                    let src = value.to_ne_bytes();
                     Self(bitfield_struct::bit_copy(self.0, #offset, &src, 0, #bits))
                 }
                 #doc
                 #[doc = #location]
                 #vis const fn #ident(&self) -> #ty {
+                    // copy to the upper half
                     let out = bitfield_struct::bit_copy(
                         [0; #ty::BITS as usize / 8], #ty::BITS as usize - #bits, &self.0, #offset, #bits);
-                    #[cfg(target_endian = "little")]
-                    let out = #ty::from_le_bytes(out);
-                    #[cfg(target_endian = "big")]
-                    let out = #ty::from_be_bytes(out);
-                    out >> (#ty::BITS as usize - #bits)
+                    // shift down to potentially perform a sign extend
+                    #ty::from_ne_bytes(out) >> (#ty::BITS as usize - #bits)
                 }
             },
             TypeClass::Other => quote! {
@@ -328,54 +323,50 @@ impl ToTokens for Member {
 
 /// Parses the `bits` attribute that allows specifying a custom number of bits.
 fn bits(attrs: &[syn::Attribute], ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
-    fn malformed(mut e: syn::Error, attr: &syn::Attribute) -> syn::Error {
-        e.combine(syn::Error::new(attr.span(), "malformed #[bits] attribute"));
-        e
-    }
+    let size_int = matches!(ty, syn::Type::Path(syn::TypePath{ path, .. })
+    if path.is_ident("usize") || path.is_ident("isize"));
 
     for attr in attrs {
-        match attr {
-            syn::Attribute {
-                style: syn::AttrStyle::Outer,
-                path,
-                tokens,
-                ..
-            } if path.is_ident("bits") => {
-                let bits = attr
-                    .parse_args::<syn::LitInt>()
-                    .map_err(|e| malformed(e, attr))?
-                    .base10_parse()
-                    .map_err(|e| malformed(e, attr))?;
-
-                return if bits == 0 {
-                    Ok((TypeClass::Other, 0))
-                } else if let Ok((class, size)) = type_bits(ty) {
-                    if bits <= size {
-                        Ok((class, bits))
-                    } else {
-                        Err(syn::Error::new(tokens.span(), "overflowing field type"))
-                    }
-                } else if matches!(ty, syn::Type::Path(syn::TypePath{ path, .. })
-                    if path.is_ident("usize") || path.is_ident("isize"))
-                {
-                    // isize and usize are supported but types size is not known at this point!
-                    // Meaning that they must have a bits attribute explicitly defining their size
-                    Ok((TypeClass::SizeInt, bits))
-                } else {
-                    Ok((TypeClass::Other, bits))
-                };
+        if let syn::Attribute {
+            style: syn::AttrStyle::Outer,
+            path,
+            tokens,
+            ..
+        } = attr
+        {
+            if !path.is_ident("bits") {
+                continue;
             }
-            _ => {}
+
+            let bits = attr
+                .parse_args::<syn::LitInt>()
+                .map_err(|e| e.with(Error::new(attr.span(), "malformed #[bits] attribute")))?
+                .base10_parse()
+                .map_err(|e| e.with(Error::new(attr.span(), "malformed #[bits] attribute")))?;
+
+            return if bits == 0 {
+                Ok((TypeClass::Other, 0))
+            } else if let Ok((class, size)) = type_bits(ty) {
+                if bits <= size {
+                    Ok((class, bits))
+                } else {
+                    Err(Error::new(tokens.span(), "overflowing field type"))
+                }
+            } else if size_int {
+                // isize and usize are supported but their bit size is not known at this point!
+                // Meaning that they must have a bits attribute explicitly defining their size
+                Ok((TypeClass::SizeInt, bits))
+            } else {
+                Ok((TypeClass::Other, bits))
+            };
         }
     }
 
-    if let syn::Type::Path(syn::TypePath { path, .. }) = ty {
-        if path.is_ident("usize") || path.is_ident("isize") {
-            return Err(syn::Error::new(
-                ty.span(),
-                "isize and usize fields require the #[bits($1)] attribute",
-            ));
-        }
+    if size_int {
+        return Err(Error::new(
+            ty.span(),
+            "isize and usize fields require the #[bits($1)] attribute",
+        ));
     }
 
     // Fallback to type size
@@ -384,11 +375,13 @@ fn bits(attrs: &[syn::Attribute], ty: &syn::Type) -> syn::Result<(TypeClass, usi
 
 /// Returns the number of bits for a given type
 fn type_bits(ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
+    let err_unsupported = Error::new(ty.span(), "unsupported type");
+
     let syn::Type::Path(syn::TypePath{ path, .. }) = ty else {
-        return Err(syn::Error::new(ty.span(), "unsupported type"))
+        return Err(err_unsupported)
     };
     let Some(ident) = path.get_ident() else {
-        return Err(syn::Error::new(ty.span(), "unsupported type"))
+        return Err(err_unsupported)
     };
     if ident == "bool" {
         return Ok((TypeClass::Bool, 1));
@@ -397,7 +390,7 @@ fn type_bits(ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
         ($ident:ident => $($ty:ident),*) => {
             match ident {
                 $(_ if ident == stringify!($ty) => Ok((TypeClass::Int, $ty::BITS as _)),)*
-                _ => Err(syn::Error::new(ty.span(), "unsupported type"))
+                _ => Err(err_unsupported)
             }
         };
     }
@@ -423,7 +416,7 @@ impl Parse for Params {
             let t = syn::Type::parse(input)?;
             let (class, bits) = type_bits(&t)?;
             if class != TypeClass::Int {
-                return Err(syn::Error::new(
+                return Err(Error::new(
                     input.span(),
                     "Invalid argument or type, expecting `bytes` or an integer type",
                 ));
@@ -460,7 +453,7 @@ impl Parse for Bytes {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let ident = Ident::parse(input)?;
         if ident != "bytes" {
-            return Err(syn::Error::new(
+            return Err(Error::new(
                 ident.span(),
                 "Invalid argument, expecting `bytes` or an integer type",
             ));
@@ -488,8 +481,19 @@ impl Parse for Param {
         } else if ident == "debug" {
             Ok(Self::Debug(syn::LitBool::parse(input)?.value))
         } else {
-            Err(syn::Error::new(ident.span(), "unknown argument"))
+            Err(Error::new(ident.span(), "unknown argument"))
         }
+    }
+}
+
+trait ErrorExt {
+    fn with(self, other: Self) -> Self;
+}
+
+impl ErrorExt for Error {
+    fn with(mut self, other: Self) -> Self {
+        self.combine(other);
+        self
     }
 }
 

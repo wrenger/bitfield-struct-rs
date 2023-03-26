@@ -269,12 +269,14 @@ pub const fn bit_copy<const D: usize>(
     }
 }
 
+/// Test if this bit is set
 #[inline(always)]
 pub const fn is_bit_set(src: &[u8], i: usize) -> bool {
     debug_assert!(i < src.len() * 8);
     (src[i / 8] >> (i % 8)) & 1 != 0
 }
 
+/// Only a single bit is copied
 #[inline(always)]
 const fn single_bit(dst: u8, dst_off: usize, src: &[u8], src_off: usize) -> u8 {
     debug_assert!(dst_off < 8);
@@ -285,24 +287,29 @@ const fn single_bit(dst: u8, dst_off: usize, src: &[u8], src_off: usize) -> u8 {
     }
 }
 
+/// We have only one destination byte.
 #[inline(always)]
 const fn single_byte(dst: u8, dst_off: usize, src: &[u8], src_off: usize, len: usize) -> u8 {
-    debug_assert!(dst_off < 8);
+    const MAX: u8 = u8::MAX;
+    const BITS: usize = u8::BITS as _;
 
-    let src_i = src_off / 8;
-    let src_off = src_off % 8;
+    debug_assert!(dst_off < BITS);
 
-    let mask = (u8::MAX >> (8 - len)) << dst_off;
+    let src_i = src_off / BITS;
+    let src_off = src_off % BITS;
+
+    let mask = (MAX >> (BITS - len)) << dst_off;
     let mut dst = dst & !mask;
     dst |= ((src[src_i] >> src_off) << dst_off) & mask;
 
     // exceeding a single byte of the src buffer
-    if len + src_off > 8 {
-        dst |= (src[src_i + 1] << (8 - src_off + dst_off)) & mask;
+    if len + src_off > BITS {
+        dst |= (src[src_i + 1] << (BITS - src_off + dst_off)) & mask;
     }
     dst
 }
 
+/// The buffers have different bit offsets
 #[inline(always)]
 const fn copy_unaligned<const D: usize>(
     mut dst: [u8; D],
@@ -311,26 +318,29 @@ const fn copy_unaligned<const D: usize>(
     mut src_off: usize,
     mut len: usize,
 ) -> [u8; D] {
-    debug_assert!(src_off % 8 != 0 || dst_off % 8 != 0);
-    debug_assert!(dst.len() * 8 >= dst_off + len);
-    debug_assert!(src.len() * 8 >= src_off + len);
+    const MAX: u8 = u8::MAX;
+    const BITS: usize = u8::BITS as _;
 
-    let mut dst_i = dst_off / 8;
-    dst_off %= 8;
-    let mut src_i = src_off / 8;
-    src_off %= 8;
+    debug_assert!(src_off % BITS != 0 || dst_off % BITS != 0);
+    debug_assert!(dst.len() * BITS >= dst_off + len);
+    debug_assert!(src.len() * BITS >= src_off + len);
+
+    let mut dst_i = dst_off / BITS;
+    dst_off %= BITS;
+    let mut src_i = src_off / BITS;
+    src_off %= BITS;
 
     // copy dst prefix -> byte-align dst
     if dst_off > 0 {
-        let prefix = 8 - dst_off;
-        let mask = u8::MAX << dst_off;
+        let prefix = BITS - dst_off;
+        let mask = MAX << dst_off;
         dst[dst_i] &= !mask;
         dst[dst_i] |= (src[src_i] >> src_off) << dst_off;
 
         // exceeding a single byte of the src buffer
-        dst_off += 8 - src_off;
+        dst_off += BITS - src_off;
         src_off += prefix;
-        if let Some(reminder) = src_off.checked_sub(8) {
+        if let Some(reminder) = src_off.checked_sub(BITS) {
             src_i += 1;
             if reminder > 0 {
                 dst[dst_i] |= src[src_i] << dst_off
@@ -343,26 +353,28 @@ const fn copy_unaligned<const D: usize>(
 
     // copy middle
     let mut i = 0;
-    while i < len / 8 {
-        dst[dst_i + i] = (src[src_i + i] >> src_off) | (src[src_i + i + 1] << (8 - src_off));
+    while i < len / BITS {
+        dst[dst_i + i] = (src[src_i + i] >> src_off) | (src[src_i + i + 1] << (BITS - src_off));
         i += 1;
     }
 
     // suffix
-    let suffix = len % 8;
+    let suffix = len % BITS;
     if suffix > 0 {
-        let last = len / 8;
-        let mask = u8::MAX >> (8 - suffix);
+        let last = len / BITS;
+        let mask = MAX >> (BITS - suffix);
         dst[dst_i + last] &= !mask;
         dst[dst_i + last] |= src[src_i + last] >> src_off;
 
         // exceeding a single byte of the src buffer
-        if suffix + src_off > 8 {
-            dst[dst_i + last] |= (src[src_i + last + 1] << (8 - src_off)) & mask;
+        if suffix + src_off > BITS {
+            dst[dst_i + last] |= (src[src_i + last + 1] << (BITS - src_off)) & mask;
         }
     }
     dst
 }
+
+/// The buffers have the same bit offsets
 #[inline(always)]
 const fn copy_aligned<const D: usize>(
     mut dst: [u8; D],
@@ -372,14 +384,17 @@ const fn copy_aligned<const D: usize>(
     off: usize,
     mut len: usize,
 ) -> [u8; D] {
-    debug_assert!(off < 8);
-    debug_assert!(dst.len() * 8 >= dst_i * 8 + len);
-    debug_assert!(src.len() * 8 >= src_i * 8 + len);
+    const MAX: u8 = u8::MAX;
+    const BITS: usize = u8::BITS as _;
+
+    debug_assert!(off < BITS);
+    debug_assert!(dst.len() * BITS >= dst_i * BITS + len);
+    debug_assert!(src.len() * BITS >= src_i * BITS + len);
 
     // copy prefix -> byte-align dst
     if off > 0 {
-        let prefix = 8 - (off % 8);
-        let mask = u8::MAX << (off % 8);
+        let prefix = BITS - (off % BITS);
+        let mask = MAX << (off % BITS);
         dst[dst_i] &= !mask;
         dst[dst_i] |= src[src_i] & mask;
 
@@ -390,16 +405,16 @@ const fn copy_aligned<const D: usize>(
 
     // copy middle
     let mut i = 0;
-    while i < len / 8 {
+    while i < len / BITS {
         dst[dst_i + i] = src[src_i + i];
         i += 1;
     }
 
     // copy suffix
-    let suffix = len % 8;
+    let suffix = len % BITS;
     if suffix > 0 {
-        let last = len / 8;
-        let mask = u8::MAX >> (8 - suffix);
+        let last = len / BITS;
+        let mask = MAX >> (BITS - suffix);
         dst[dst_i + last] &= !mask;
         dst[dst_i + last] |= src[src_i + last];
     }
