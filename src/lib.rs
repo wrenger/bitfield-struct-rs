@@ -374,7 +374,7 @@ impl Member {
 
         let (class, bits) = bits(&attrs, &ty)?;
         // remove our attribute
-        attrs.retain(|a| !a.path.is_ident("bits"));
+        attrs.retain(|a| !a.path().is_ident("bits"));
 
         Ok(Self {
             base_ty,
@@ -427,7 +427,7 @@ impl ToTokens for Member {
 
         let doc: TokenStream = attrs
             .iter()
-            .filter(|a| !a.path.is_ident("bits"))
+            .filter(|a| !a.path().is_ident("bits"))
             .map(ToTokens::to_token_stream)
             .collect();
 
@@ -509,12 +509,10 @@ fn bits(attrs: &[syn::Attribute], ty: &syn::Type) -> syn::Result<(TypeClass, usi
         match attr {
             syn::Attribute {
                 style: syn::AttrStyle::Outer,
-                path,
-                tokens,
+                meta: syn::Meta::List(syn::MetaList { path, tokens, .. }),
                 ..
             } if path.is_ident("bits") => {
-                let bits = attr
-                    .parse_args::<syn::LitInt>()
+                let bits = syn::parse2::<syn::LitInt>(tokens.clone())
                     .map_err(|e| malformed(e, attr))?
                     .base10_parse()
                     .map_err(|e| malformed(e, attr))?;
