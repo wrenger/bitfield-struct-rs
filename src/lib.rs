@@ -293,7 +293,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             let bits = m.bits;
             let msg = format!("overflowing field type of '{}'", m.ident);
             Some(quote!(
-                const _: () = assert!(#bits <= 8 * std::mem::size_of::<usize>(), #msg);
+                const _: () = assert!(#bits <= 8 * core::mem::size_of::<usize>(), #msg);
             ))
         } else {
             None
