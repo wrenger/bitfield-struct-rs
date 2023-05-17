@@ -442,7 +442,8 @@ impl ToTokens for Member {
             }
         };
 
-        let mask: u128 = !0 >> (u128::BITS as usize - bits);
+        let bits = *bits as u32;
+        let mask: u128 = !0 >> (u128::BITS - bits);
         let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
 
         let code = match class {
@@ -466,13 +467,14 @@ impl ToTokens for Member {
                 #doc
                 #[doc = #location]
                 #vis const fn #with_ident(self, value: #ty) -> Self {
-                    debug_assert!(value <= #mask);
+                    #[allow(unused_comparisons)]
+                    debug_assert!(if value >= 0 { value & !#mask == 0 } else { !value & !#mask == 0 }, "value out of bounds");
                     Self(self.0 & !(#mask << #offset) | (value as #base_ty & #mask) << #offset)
                 }
                 #doc
                 #[doc = #location]
                 #vis const fn #ident(&self) -> #ty {
-                    let shift = #ty::BITS as usize - #bits;
+                    let shift = #ty::BITS - #bits;
                     (((self.0 >> #offset) as #ty) << shift) >> shift
                 }
             },
@@ -483,13 +485,14 @@ impl ToTokens for Member {
                 #[doc = #location]
                 #vis fn #with_ident(self, value: #ty) -> Self {
                     let value: #base_ty = value.into();
-                    debug_assert!(value <= #mask);
+                    #[allow(unused_comparisons)]
+                    debug_assert!(if value >= 0 { value & !#mask == 0 } else { !value & !#mask == 0 }, "value out of bounds");
                     Self(self.0 & !(#mask << #offset) | (value & #mask) << #offset)
                 }
                 #doc
                 #[doc = #location]
                 #vis fn #ident(&self) -> #ty {
-                    let shift = #base_ty::BITS as usize - #bits;
+                    let shift = #base_ty::BITS - #bits;
                     (((self.0 >> #offset) << shift) >> shift).into()
                 }
             },

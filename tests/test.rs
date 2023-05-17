@@ -119,3 +119,60 @@ fn debug() {
     let full = Full::new().with_data(123);
     println!("{full:?}");
 }
+
+#[test]
+fn positive() {
+    #[bitfield(u32)]
+    struct MyBitfield {
+        #[bits(3)]
+        positive: u32,
+        #[bits(29)]
+        _p: (),
+    }
+
+    let v = MyBitfield::new().with_positive(0);
+    assert_eq!(v.positive(), 0);
+    let v = MyBitfield::new().with_positive(1);
+    assert_eq!(v.positive(), 1);
+    let v = MyBitfield::new().with_positive(7);
+    assert_eq!(v.positive(), 7);
+}
+
+#[test]
+fn negative() {
+    #[bitfield(u32)]
+    struct MyBitfield {
+        #[bits(3)]
+        negative: i32,
+        #[bits(29)]
+        _p: (),
+    }
+
+    let v = MyBitfield::new().with_negative(-3);
+    assert_eq!(v.negative(), -3);
+    let v = MyBitfield::new().with_negative(0);
+    assert_eq!(v.negative(), 0);
+    let v = MyBitfield::new().with_negative(3);
+    assert_eq!(v.negative(), 3);
+    let v = MyBitfield::new().with_negative(-4);
+    assert_eq!(v.negative(), -4);
+}
+
+#[test]
+fn entirely_negative() {
+    #[bitfield(u32)]
+    struct MyBitfield {
+        negative: i32,
+    }
+
+    let v = MyBitfield::new().with_negative(-3);
+    assert_eq!(v.negative(), -3);
+    let v = MyBitfield::new().with_negative(0);
+    assert_eq!(v.negative(), 0);
+    let v = MyBitfield::new().with_negative(3);
+    assert_eq!(v.negative(), 3);
+    let v = MyBitfield::new().with_negative(i32::MIN);
+    assert_eq!(v.negative(), i32::MIN);
+    let v = MyBitfield::new().with_negative(i32::MAX);
+    assert_eq!(v.negative(), i32::MAX);
+}
