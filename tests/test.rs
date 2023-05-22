@@ -10,6 +10,7 @@ fn members() {
         /// defaults to 16 bits for u16
         int: u16,
         /// interpreted as 1 bit flag
+        #[bits(default = true)]
         flag: bool,
         /// custom bit size
         #[bits(1)]
@@ -17,18 +18,15 @@ fn members() {
         /// sign extend for signed integers
         #[bits(13)]
         negative: i16,
-        /// supports any type that implements `From<u64>` and `Into<u64>`
-        #[bits(16)]
+        /// supports any type, with default/to/from expressions (that are const eval)
+        #[bits(16, default = CustomEnum::A, into = this as _, from = CustomEnum::from_bits(this))]
         custom: CustomEnum,
         /// public field -> public accessor functions
         #[bits(12)]
         pub public: usize,
         /// padding
         #[bits(5)]
-        _p: u8,
-        /// zero-sized members are ignored
-        #[bits(0)]
-        _completely_ignored: String,
+        _p: (),
     }
 
     /// A custom enum
@@ -39,8 +37,8 @@ fn members() {
         B = 1,
         C = 2,
     }
-    impl From<u64> for CustomEnum {
-        fn from(value: u64) -> Self {
+    impl CustomEnum {
+        const fn from_bits(value: u64) -> Self {
             match value {
                 0 => Self::A,
                 1 => Self::B,
@@ -48,15 +46,9 @@ fn members() {
             }
         }
     }
-    impl From<CustomEnum> for u64 {
-        fn from(value: CustomEnum) -> Self {
-            value as _
-        }
-    }
 
     let mut val = MyBitfield::new()
         .with_int(3 << 15)
-        .with_flag(true)
         .with_tiny(1)
         .with_negative(-3)
         .with_custom(CustomEnum::B)
@@ -68,7 +60,7 @@ fn members() {
     println!("{raw:b}");
 
     assert_eq!(val.int(), 3 << 15);
-    assert_eq!(val.flag(), true);
+    assert_eq!(val.flag(), true); // from default
     assert_eq!(val.negative(), -3);
     assert_eq!(val.tiny(), 1);
     assert_eq!(val.custom(), CustomEnum::B);

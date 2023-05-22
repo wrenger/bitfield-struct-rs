@@ -88,7 +88,8 @@ The example below shows how attributes are carried over and how signed integers,
 struct MyBitfield {
     /// defaults to 16 bits for u16
     int: u16,
-    /// interpreted as 1 bit flag
+    /// interpreted as 1 bit flag, with custom default
+    #[bits(default = true)]
     flag: bool,
     /// custom bit size
     #[bits(1)]
@@ -96,8 +97,8 @@ struct MyBitfield {
     /// sign extend for signed integers
     #[bits(13)]
     negative: i16,
-    /// supports any type that implements `From<u64>` and `Into<u64>`
-    #[bits(16)]
+    /// supports any type, with default/to/from expressions (that are const eval)
+    #[bits(16, default = CustomEnum::A, into = this as _, from = CustomEnum::from_bits(this))]
     custom: CustomEnum,
     /// public field -> public accessor functions
     #[bits(12)]
@@ -105,10 +106,8 @@ struct MyBitfield {
     /// padding
     #[bits(5)]
     _p: u8,
-    /// zero-sized members are ignored
-    #[bits(0)]
-    _completely_ignored: String,
 }
+
 /// A custom enum
 #[derive(Debug, PartialEq, Eq)]
 #[repr(u64)]
@@ -117,12 +116,20 @@ enum CustomEnum {
     B = 1,
     C = 2,
 }
-// implement `From<u64>` and `Into<u64>` for `CustomEnum`!
+impl CustomEnum {
+    // This has to be const eval
+    const fn from_bits(value: u64) -> Self {
+        match value {
+            0 => Self::A,
+            1 => Self::B,
+            _ => Self::C,
+        }
+    }
+}
 
 // Usage:
 let mut val = MyBitfield::new()
     .with_int(3 << 15)
-    .with_flag(true)
     .with_tiny(1)
     .with_negative(-3)
     .with_custom(CustomEnum::B)

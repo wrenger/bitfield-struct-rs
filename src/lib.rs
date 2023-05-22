@@ -13,7 +13,7 @@
 //!
 //! ## Basics
 //!
-//! Let's begin with a simple example.</br>
+//! Let's begin with a simple example.<br>
 //! Suppose we want to store multiple data inside a single Byte, as shown below:
 //!
 //! <table>
@@ -78,7 +78,8 @@
 //! struct MyBitfield {
 //!     /// defaults to 16 bits for u16
 //!     int: u16,
-//!     /// interpreted as 1 bit flag
+//!     /// interpreted as 1 bit flag, with custom default
+//!     #[bits(default = true)]
 //!     flag: bool,
 //!     /// custom bit size
 //!     #[bits(1)]
@@ -86,8 +87,8 @@
 //!     /// sign extend for signed integers
 //!     #[bits(13)]
 //!     negative: i16,
-//!     /// supports any type that implements `From<u64>` and `Into<u64>`
-//!     #[bits(16)]
+//!     /// supports any type, with default/to/from expressions (that are const eval)
+//!     #[bits(16, default = CustomEnum::A, into = this as _, from = CustomEnum::from_bits(this))]
 //!     custom: CustomEnum,
 //!     /// public field -> public accessor functions
 //!     #[bits(12)]
@@ -95,9 +96,6 @@
 //!     /// padding
 //!     #[bits(5)]
 //!     _p: u8,
-//!     /// zero-sized members are ignored
-//!     #[bits(0)]
-//!     _completely_ignored: String,
 //! }
 //!
 //! /// A custom enum
@@ -108,26 +106,20 @@
 //!     B = 1,
 //!     C = 2,
 //! }
-//! // implement `From<u64>` and `Into<u64>` for `CustomEnum`!
-//! # impl From<u64> for CustomEnum {
-//! #     fn from(value: u64) -> Self {
-//! #         match value {
-//! #             0 => Self::A,
-//! #             1 => Self::B,
-//! #             _ => Self::C,
-//! #         }
-//! #     }
-//! # }
-//! # impl From<CustomEnum> for u64 {
-//! #     fn from(value: CustomEnum) -> Self {
-//! #         value as _
-//! #     }
-//! # }
+//! impl CustomEnum {
+//!     // This has to be const eval
+//!     const fn from_bits(value: u64) -> Self {
+//!         match value {
+//!             0 => Self::A,
+//!             1 => Self::B,
+//!             _ => Self::C,
+//!         }
+//!     }
+//! }
 //!
 //! // Usage:
 //! let mut val = MyBitfield::new()
 //!     .with_int(3 << 15)
-//!     .with_flag(true)
 //!     .with_tiny(1)
 //!     .with_negative(-3)
 //!     .with_custom(CustomEnum::B)
@@ -231,8 +223,7 @@ pub fn bitfield(args: pc::TokenStream, input: pc::TokenStream) -> pc::TokenStrea
 
 fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     let input = syn::parse2::<syn::ItemStruct>(input)?;
-    let Params { ty, bits, debug } =
-        syn::parse2::<Params>(args).map_err(|e| unsupported_param(e, input.span()))?;
+    let Params { ty, bits, debug } = syn::parse2::<Params>(args)?;
 
     let span = input.fields.span();
     let name = input.ident;
@@ -286,19 +277,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         Default::default()
     };
 
-    // The size of isize and usize is architecture dependent and not known for proc_macros,
-    // thus we have to check it with const asserts.
-    let const_asserts = members.iter().filter_map(|m| {
-        if m.class == TypeClass::SizeInt {
-            let bits = m.bits;
-            let msg = format!("overflowing field type of '{}'", m.ident);
-            Some(quote!(
-                const _: () = assert!(#bits <= 8 * core::mem::size_of::<usize>(), #msg);
-            ))
-        } else {
-            None
-        }
-    });
+    let defaults = members.iter().map(|m| m.default());
 
     Ok(quote! {
         #attrs
@@ -310,6 +289,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             /// Creates a new zero initialized bitfield.
             #vis const fn new() -> Self {
                 Self(0)
+                #( #defaults )*
             }
 
             #( #members )*
@@ -326,37 +306,26 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             }
         }
 
-        #( #const_asserts )*
-
         #debug_impl
     })
 }
 
-/// Distinguish between different types for code generation.
-///
-/// We need this to make accessor functions for bool and ints const.
-/// As soon as we have const conversion traits, we can simply switch to `TryFrom` and don't have to generate different code.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum TypeClass {
-    /// Booleans with 1 bit size
-    Bool,
-    /// Ints with fixes sizes: u8, u64, ...
-    Int,
-    /// Ints with architecture dependend sizes: usize, isize
-    SizeInt,
-    /// Custom types
-    Other,
+/// Represents a member where accessor functions should be generated for.
+struct Member {
+    offset: usize,
+    bits: usize,
+    base_ty: syn::Type,
+    inner: Option<MemberInner>,
 }
 
-struct Member {
-    base_ty: syn::Type,
-    attrs: Vec<syn::Attribute>,
-    ty: syn::Type,
-    class: TypeClass,
-    bits: usize,
+struct MemberInner {
     ident: syn::Ident,
+    ty: syn::Type,
+    attrs: Vec<syn::Attribute>,
     vis: syn::Visibility,
-    offset: usize,
+    default: TokenStream,
+    into: TokenStream,
+    from: TokenStream,
 }
 
 impl Member {
@@ -372,28 +341,68 @@ impl Member {
         } = f;
 
         let ident = ident.ok_or_else(|| syn::Error::new(span, "Not supported"))?;
+        let ignore = ident.to_string().starts_with('_');
 
-        let (class, bits) = bits(&attrs, &ty)?;
-        // remove our attribute
-        attrs.retain(|a| !a.path().is_ident("bits"));
-
-        Ok(Self {
-            base_ty,
-            attrs,
-            ty,
-            class,
+        let Field {
             bits,
-            ident,
-            vis,
-            offset,
-        })
+            ty,
+            class: _,
+            default,
+            into,
+            from,
+        } = parse_field(&attrs, &ty, ignore)?;
+
+        if bits > 0 && !ignore {
+            if default.is_empty() || into.is_empty() || from.is_empty() {
+                return Err(syn::Error::new(
+                    ty.span(),
+                    "Custom types require 'default', 'to', and 'from' in the #[bits] attribute",
+                ));
+            }
+
+            // remove our attribute
+            attrs.retain(|a| !a.path().is_ident("bits"));
+
+            Ok(Self {
+                offset,
+                bits,
+                base_ty,
+                inner: Some(MemberInner {
+                    ident,
+                    ty,
+                    attrs,
+                    vis,
+                    default,
+                    into,
+                    from,
+                }),
+            })
+        } else {
+            Ok(Self {
+                offset,
+                bits,
+                base_ty,
+                inner: None,
+            })
+        }
     }
 
     fn debug(&self) -> TokenStream {
-        let ident_str = self.ident.to_string();
-        if self.bits > 0 && !ident_str.starts_with('_') {
-            let ident = &self.ident;
+        if let Some(inner) = &self.inner {
+            let ident_str = inner.ident.to_string();
+            let ident = &inner.ident;
             quote!(.field(#ident_str, &self.#ident()))
+        } else {
+            Default::default()
+        }
+    }
+
+    fn default(&self) -> TokenStream {
+        if let Some(inner) = &self.inner {
+            let ident = &inner.ident;
+            let with_ident = format_ident!("with_{ident}");
+            let default = &inner.default;
+            quote!(.#with_ident(#default))
         } else {
             Default::default()
         }
@@ -403,21 +412,15 @@ impl Member {
 impl ToTokens for Member {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self {
-            base_ty,
-            attrs,
-            ty,
-            class,
-            bits,
-            ident,
-            vis,
             offset,
-        } = self;
-        let ident_str = ident.to_string();
-
-        // Skip zero sized and padding members
-        if self.bits == 0 || ident_str.starts_with('_') {
+            bits,
+            base_ty,
+            inner: Some(MemberInner { ident, ty, attrs, vis, default: _, into, from }),
+        } = self else {
             return Default::default();
-        }
+        };
+
+        let ident_str = ident.to_string();
 
         let with_ident = format_ident!("with_{ident}");
         let set_ident = format_ident!("set_{ident}");
@@ -447,76 +450,99 @@ impl ToTokens for Member {
         let mask: u128 = !0 >> (u128::BITS - bits);
         let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
 
-        let code = match class {
-            TypeClass::Bool => quote! {
-                #general
+        let code = quote! {
+            #general
 
-                #doc
-                #[doc = #location]
-                #vis const fn #with_ident(self, value: #ty) -> Self {
-                    Self(self.0 & !(1 << #offset) | (value as #base_ty) << #offset)
-                }
-                #doc
-                #[doc = #location]
-                #vis const fn #ident(&self) -> #ty {
-                    ((self.0 >> #offset) & 1) != 0
-                }
-            },
-            TypeClass::Int | TypeClass::SizeInt => quote! {
-                #general
-
-                #doc
-                #[doc = #location]
-                #vis const fn #with_ident(self, value: #ty) -> Self {
-                    #[allow(unused_comparisons)]
-                    #[allow(clippy::bad_bit_mask)]
-                    {
-                        debug_assert!(if value >= 0 { value & !#mask == 0 } else { !value & !#mask == 0 }, "value out of bounds");
-                    }
-
-                    Self(self.0 & !(#mask << #offset) | (value as #base_ty & #mask) << #offset)
-                }
-                #doc
-                #[doc = #location]
-                #vis const fn #ident(&self) -> #ty {
-                    let shift = #ty::BITS - #bits;
-                    (((self.0 >> #offset) as #ty) << shift) >> shift
-                }
-            },
-            TypeClass::Other => quote! {
-                #general
-
-                #doc
-                #[doc = #location]
-                #vis fn #with_ident(self, value: #ty) -> Self {
-                    let value: #base_ty = value.into();
-                    #[allow(unused_comparisons)]
-                    #[allow(clippy::bad_bit_mask)]
-                    {
-                        debug_assert!(if value >= 0 { value & !#mask == 0 } else { !value & !#mask == 0 }, "value out of bounds");
-                    }
-
-                    Self(self.0 & !(#mask << #offset) | (value & #mask) << #offset)
-                }
-                #doc
-                #[doc = #location]
-                #vis fn #ident(&self) -> #ty {
-                    let shift = #base_ty::BITS - #bits;
-                    (((self.0 >> #offset) << shift) >> shift).into()
-                }
-            },
+            #doc
+            #[doc = #location]
+            #vis const fn #with_ident(self, value: #ty) -> Self {
+                let value: #base_ty = {
+                    let this = value;
+                    #into
+                };
+                debug_assert!(value <= #mask, "value out of bounds");
+                Self(self.0 & !(#mask << #offset) | (value & #mask) << #offset)
+            }
+            #doc
+            #[doc = #location]
+            #vis const fn #ident(&self) -> #ty {
+                let this = (self.0 >> #offset) & #mask;
+                #from
+            }
         };
         tokens.extend(code);
     }
 }
 
+/// Distinguish between different types for code generation.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum TypeClass {
+    /// Booleans with 1 bit size
+    Bool,
+    /// Unsigned ints with fixes sizes: u8, u64, ...
+    UInt,
+    /// Signed ints with fixes sizes: i8, i64, ...
+    SInt,
+    /// Custom types
+    Other,
+}
+
+/// Field information, including the `bits` attribute
+struct Field {
+    bits: usize,
+    ty: syn::Type,
+    class: TypeClass,
+
+    default: TokenStream,
+    into: TokenStream,
+    from: TokenStream,
+}
+
 /// Parses the `bits` attribute that allows specifying a custom number of bits.
-fn bits(attrs: &[syn::Attribute], ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
+fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::Result<Field> {
     fn malformed(mut e: syn::Error, attr: &syn::Attribute) -> syn::Error {
         e.combine(syn::Error::new(attr.span(), "malformed #[bits] attribute"));
         e
     }
 
+    // Defaults for the different types
+    let (class, ty_bits) = type_bits(ty);
+    let mut ret = match class {
+        TypeClass::Bool => Field {
+            bits: ty_bits,
+            ty: ty.clone(),
+            class,
+            default: quote!(false),
+            into: quote!(this as _),
+            from: quote!(this != 0),
+        },
+        TypeClass::SInt => Field {
+            bits: ty_bits,
+            ty: ty.clone(),
+            class,
+            default: quote!(0),
+            into: TokenStream::new(),
+            from: TokenStream::new(),
+        },
+        TypeClass::UInt => Field {
+            bits: ty_bits,
+            ty: ty.clone(),
+            class,
+            default: quote!(0),
+            into: quote!(this as _),
+            from: quote!(this as _),
+        },
+        TypeClass::Other => Field {
+            bits: ty_bits,
+            ty: ty.clone(),
+            class,
+            default: TokenStream::new(),
+            into: TokenStream::new(),
+            from: TokenStream::new(),
+        },
+    };
+
+    // Find and parse the bits attribute
     for attr in attrs {
         match attr {
             syn::Attribute {
@@ -524,68 +550,152 @@ fn bits(attrs: &[syn::Attribute], ty: &syn::Type) -> syn::Result<(TypeClass, usi
                 meta: syn::Meta::List(syn::MetaList { path, tokens, .. }),
                 ..
             } if path.is_ident("bits") => {
-                let bits = syn::parse2::<syn::LitInt>(tokens.clone())
-                    .map_err(|e| malformed(e, attr))?
-                    .base10_parse()
-                    .map_err(|e| malformed(e, attr))?;
+                let BitsAttr {
+                    bits,
+                    default,
+                    into,
+                    from,
+                } = syn::parse2::<BitsAttr>(tokens.clone()).map_err(|e| malformed(e, attr))?;
 
-                return if bits == 0 {
-                    Ok((TypeClass::Other, 0))
-                } else if let Ok((class, size)) = type_bits(ty) {
-                    if bits <= size {
-                        Ok((class, bits))
-                    } else {
-                        Err(syn::Error::new(tokens.span(), "overflowing field type"))
+                if let Some(bits) = bits {
+                    if bits == 0 {
+                        return Err(syn::Error::new(tokens.span(), "bits cannot bit 0"));
                     }
-                } else if matches!(ty, syn::Type::Path(syn::TypePath{ path, .. })
-                    if path.is_ident("usize") || path.is_ident("isize"))
-                {
-                    // isize and usize are supported but types size is not known at this point!
-                    // Meaning that they must have a bits attribute explicitly defining their size
-                    Ok((TypeClass::SizeInt, bits))
-                } else {
-                    Ok((TypeClass::Other, bits))
-                };
+                    if ty_bits != 0 && bits > ty_bits {
+                        return Err(syn::Error::new(tokens.span(), "overflowing field type"));
+                    }
+                    ret.bits = bits;
+                }
+                if ignore && (default.is_some() || into.is_some() || from.is_some()) {
+                    return Err(syn::Error::new(
+                        default.span(),
+                        "'default', 'to', and 'from' are not (yet) supported on padding",
+                    ));
+                }
+
+                if let Some(default) = default {
+                    ret.default = default;
+                }
+                if let Some(to) = into {
+                    ret.into = to;
+                }
+                if let Some(from) = from {
+                    ret.from = from;
+                }
             }
             _ => {}
         }
     }
 
-    if let syn::Type::Path(syn::TypePath { path, .. }) = ty {
-        if path.is_ident("usize") || path.is_ident("isize") {
-            return Err(syn::Error::new(
-                ty.span(),
-                "isize and usize fields require the #[bits($1)] attribute",
-            ));
+    if ret.bits == 0 {
+        return Err(syn::Error::new(
+            ty.span(),
+            "Custom types and isize/usize require the size in the #[bits] attribute",
+        ));
+    }
+
+    // Negative integers need some special handling...
+    if !ignore && ret.class == TypeClass::SInt {
+        let bits = ret.bits as u32;
+        let mask: u128 = !0 >> (u128::BITS - bits);
+        let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
+        if ret.into.is_empty() {
+            // Bounds check and remove leading ones from negative values
+            ret.into = quote! {{
+                #[allow(unused_comparisons)]
+                debug_assert!(if this >= 0 { this & !#mask == 0 } else { !this & !#mask == 0 }, "value out of bounds");
+                (this & #mask) as _
+            }};
+        }
+        if ret.from.is_empty() {
+            // Sign extend negative values
+            ret.from = quote! {{
+                let shift = #ty::BITS - #bits;
+                ((this as #ty) << shift) >> shift
+            }};
         }
     }
 
-    // Fallback to type size
-    type_bits(ty)
+    Ok(ret)
+}
+
+/// The bits attribute of the fields of a bitfield struct
+struct BitsAttr {
+    bits: Option<usize>,
+    default: Option<TokenStream>,
+    into: Option<TokenStream>,
+    from: Option<TokenStream>,
+}
+
+impl Parse for BitsAttr {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut attr = Self {
+            bits: None,
+            default: None,
+            into: None,
+            from: None,
+        };
+        if let Ok(bits) = syn::LitInt::parse(input) {
+            attr.bits = Some(bits.base10_parse()?);
+            if !input.is_empty() {
+                <Token![,]>::parse(input)?;
+            }
+        }
+        // parse remainder
+        if !input.is_empty() {
+            loop {
+                let ident = syn::Ident::parse(input)?;
+
+                <Token![=]>::parse(input)?;
+
+                let expr = syn::Expr::parse(input)?.into_token_stream();
+
+                if ident == "default" {
+                    attr.default = Some(expr);
+                } else if ident == "into" {
+                    attr.into = Some(expr);
+                } else if ident == "from" {
+                    attr.from = Some(expr);
+                }
+
+                if input.is_empty() {
+                    break;
+                }
+
+                <Token![,]>::parse(input)?;
+            }
+        }
+        Ok(attr)
+    }
 }
 
 /// Returns the number of bits for a given type
-fn type_bits(ty: &syn::Type) -> syn::Result<(TypeClass, usize)> {
+fn type_bits(ty: &syn::Type) -> (TypeClass, usize) {
     let syn::Type::Path(syn::TypePath{ path, .. }) = ty else {
-        return Err(syn::Error::new(ty.span(), "unsupported type"))
+        return (TypeClass::Other, 0);
     };
     let Some(ident) = path.get_ident() else {
-        return Err(syn::Error::new(ty.span(), "unsupported type"))
+        return (TypeClass::Other, 0);
     };
     if ident == "bool" {
-        return Ok((TypeClass::Bool, 1));
+        return (TypeClass::Bool, 1);
+    }
+    if ident == "isize" || ident == "usize" {
+        return (TypeClass::UInt, 0); // they have architecture dependend sizes
     }
     macro_rules! integer {
-        ($ident:ident => $($ty:ident),*) => {
+        ($ident:ident => $($uint:ident),* ; $($sint:ident),*) => {
             match ident {
-                $(_ if ident == stringify!($ty) => Ok((TypeClass::Int, $ty::BITS as _)),)*
-                _ => Err(syn::Error::new(ty.span(), "unsupported type"))
+                $(_ if ident == stringify!($uint) => (TypeClass::UInt, $uint::BITS as _),)*
+                $(_ if ident == stringify!($sint) => (TypeClass::SInt, $sint::BITS as _),)*
+                _ => (TypeClass::Other, 0)
             }
         };
     }
-    integer!(ident => u8, i8, u16, i16, u32, i32, u64, i64, u128, i128)
+    integer!(ident => u8, u16, u32, u64, u128 ; i8, i16, i32, i64, i128)
 }
 
+/// The bitfield macro parameters
 struct Params {
     ty: syn::Type,
     bits: usize,
@@ -597,8 +707,8 @@ impl Parse for Params {
         let Ok(ty) = syn::Type::parse(input) else {
             return Err(syn::Error::new(input.span(), "unknown type"));
         };
-        let (class, bits) = type_bits(&ty)?;
-        if class != TypeClass::Int {
+        let (class, bits) = type_bits(&ty);
+        if class != TypeClass::UInt {
             return Err(syn::Error::new(input.span(), "unsupported type"));
         }
 
@@ -620,35 +730,51 @@ impl Parse for Params {
     }
 }
 
-fn unsupported_param<T>(mut e: syn::Error, arg: T) -> syn::Error
-where
-    T: syn::spanned::Spanned,
-{
-    e.combine(syn::Error::new(
-        arg.span(),
-        "unsupported #[bitfield] argument",
-    ));
-    e
-}
-
 #[cfg(test)]
 mod test {
     use quote::quote;
 
-    use crate::Params;
+    use crate::{BitsAttr, Params};
 
     #[test]
     fn parse_args() {
-        let args = quote! {
-            u64
-        };
+        let args = quote!(u64);
         let params = syn::parse2::<Params>(args).unwrap();
         assert!(params.bits == u64::BITS as usize && params.debug == true);
 
-        let args = quote! {
-            u32, debug = false
-        };
+        let args = quote!(u32, debug = false);
         let params = syn::parse2::<Params>(args).unwrap();
         assert!(params.bits == u32::BITS as usize && params.debug == false);
+    }
+
+    #[test]
+    fn parse_bits() {
+        let args = quote!(8);
+        let attr = syn::parse2::<BitsAttr>(args).unwrap();
+        assert_eq!(attr.bits, Some(8));
+        assert!(attr.default.is_none());
+        assert!(attr.into.is_none());
+        assert!(attr.from.is_none());
+
+        let args = quote!(8, default = 8);
+        let attr = syn::parse2::<BitsAttr>(args).unwrap();
+        assert_eq!(attr.bits, Some(8));
+        assert!(attr.default.is_some());
+        assert!(attr.into.is_none());
+        assert!(attr.from.is_none());
+
+        let args = quote!(default = 8);
+        let attr = syn::parse2::<BitsAttr>(args).unwrap();
+        assert_eq!(attr.bits, None);
+        assert!(attr.default.is_some());
+        assert!(attr.into.is_none());
+        assert!(attr.from.is_none());
+
+        let args = quote!(3, into = this as _, default = 1, from = this as _);
+        let attr = syn::parse2::<BitsAttr>(args).unwrap();
+        assert_eq!(attr.bits, Some(3));
+        assert!(attr.default.is_some());
+        assert!(attr.into.is_some());
+        assert!(attr.from.is_some());
     }
 }
