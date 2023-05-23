@@ -18,10 +18,11 @@ fn members() {
         /// sign extend for signed integers
         #[bits(13)]
         negative: i16,
-        /// supports any type, with `into`/`from` expressions (that are const eval)
+        /// supports any type, with `into_bits`/`from_bits` expressions (that are const eval),
+        /// if not configured otherwise with the `into`/`from` parameters of the bits attribute.
         ///
-        /// the field is initialized with 0 (passed into `from`) if not specified otherwise
-        #[bits(16, into = this as _, from = CustomEnum::from_bits(this))]
+        /// the field is initialized with 0 (passed into `from_bits`) if not specified otherwise
+        #[bits(16)]
         custom: CustomEnum,
         /// public field -> public accessor functions
         #[bits(12)]
@@ -40,6 +41,9 @@ fn members() {
         C = 2,
     }
     impl CustomEnum {
+        const fn into_bits(self) -> u64 {
+            self as _
+        }
         const fn from_bits(value: u64) -> Self {
             match value {
                 0 => Self::A,
