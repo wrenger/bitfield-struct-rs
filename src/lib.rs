@@ -87,10 +87,11 @@
 //!     /// sign extend for signed integers
 //!     #[bits(13)]
 //!     negative: i16,
-//!     /// supports any type, with `into`/`from` expressions (that are const eval)
+//!     /// supports any type, with `into_bits`/`from_bits` (const) functions,
+//!     /// if not configured otherwise with the `into`/`from` parameters of the bits attribute.
 //!     ///
-//!     /// the field is initialized with 0 (passed into `from`) if not specified otherwise
-//!     #[bits(16, into = this as _, from = CustomEnum::from_bits(this))]
+//!     /// the field is initialized with 0 (passed into `from_bits`) if not specified otherwise
+//!     #[bits(16)]
 //!     custom: CustomEnum,
 //!     /// public field -> public accessor functions
 //!     #[bits(12)]
@@ -109,7 +110,10 @@
 //!     C = 2,
 //! }
 //! impl CustomEnum {
-//!     // This has to be const eval
+//!     // This has to be a const fn
+//!     const fn into_bits(self) -> u64 {
+//!         self as _
+//!     }
 //!     const fn from_bits(value: u64) -> Self {
 //!         match value {
 //!             0 => Self::A,
@@ -538,9 +542,9 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
             bits: ty_bits,
             ty: ty.clone(),
             class,
-            default: TokenStream::new(),
-            into: TokenStream::new(),
-            from: TokenStream::new(),
+            default: quote!(#ty::from_bits(0)),
+            into: quote!(#ty::into_bits(this)),
+            from: quote!(#ty::from_bits(this)),
         },
     };
 
@@ -575,22 +579,19 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
                     ));
                 }
 
-                if let Some(default) = default {
-                    ret.default = default;
-                }
                 if let Some(into) = into {
-                    ret.into = into;
+                    ret.into = quote!(#into(this));
                 }
                 if let Some(from) = from {
                     // Auto-conversion from zero
-                    if ret.default.is_empty() {
-                        ret.default = quote!({
-                            let this = 0;
-                            #from
-                        });
+                    if default.is_none() {
+                        ret.default = quote!(#from(0));
                     }
 
-                    ret.from = from;
+                    ret.from = quote!(#from(this));
+                }
+                if let Some(default) = default {
+                    ret.default = default.into_token_stream();
                 }
             }
             _ => {}
@@ -632,9 +633,9 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
 /// The bits attribute of the fields of a bitfield struct
 struct BitsAttr {
     bits: Option<usize>,
-    default: Option<TokenStream>,
-    into: Option<TokenStream>,
-    from: Option<TokenStream>,
+    default: Option<syn::Expr>,
+    into: Option<syn::Path>,
+    from: Option<syn::Path>,
 }
 
 impl Parse for BitsAttr {
@@ -658,14 +659,13 @@ impl Parse for BitsAttr {
 
                 <Token![=]>::parse(input)?;
 
-                let expr = syn::Expr::parse(input)?.into_token_stream();
 
                 if ident == "default" {
-                    attr.default = Some(expr);
+                    attr.default = Some(input.parse()?);
                 } else if ident == "into" {
-                    attr.into = Some(expr);
+                    attr.into = Some(input.parse()?);
                 } else if ident == "from" {
-                    attr.from = Some(expr);
+                    attr.from = Some(input.parse()?);
                 }
 
                 if input.is_empty() {
@@ -780,7 +780,7 @@ mod test {
         assert!(attr.into.is_none());
         assert!(attr.from.is_none());
 
-        let args = quote!(3, into = this as _, default = 1, from = this as _);
+        let args = quote!(3, into = into_something, default = 1, from = from_something);
         let attr = syn::parse2::<BitsAttr>(args).unwrap();
         assert_eq!(attr.bits, Some(3));
         assert!(attr.default.is_some());
