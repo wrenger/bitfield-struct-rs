@@ -78,7 +78,7 @@
 //! struct MyBitfield {
 //!     /// defaults to 16 bits for u16
 //!     int: u16,
-//!     /// interpreted as 1 bit flag, with custom default
+//!     /// interpreted as 1 bit flag, with a custom default value
 //!     #[bits(default = true)]
 //!     flag: bool,
 //!     /// custom bit size
@@ -87,8 +87,10 @@
 //!     /// sign extend for signed integers
 //!     #[bits(13)]
 //!     negative: i16,
-//!     /// supports any type, with default/to/from expressions (that are const eval)
-//!     #[bits(16, default = CustomEnum::A, into = this as _, from = CustomEnum::from_bits(this))]
+//!     /// supports any type, with `into`/`from` expressions (that are const eval)
+//!     ///
+//!     /// the field is initialized with 0 (passed into `from`) if not specified otherwise
+//!     #[bits(16, into = this as _, from = CustomEnum::from_bits(this))]
 //!     custom: CustomEnum,
 //!     /// public field -> public accessor functions
 //!     #[bits(12)]
@@ -356,7 +358,7 @@ impl Member {
             if default.is_empty() || into.is_empty() || from.is_empty() {
                 return Err(syn::Error::new(
                     ty.span(),
-                    "Custom types require 'default', 'to', and 'from' in the #[bits] attribute",
+                    "Custom types require 'into', and 'from' in the #[bits] attribute",
                 ));
             }
 
@@ -569,17 +571,25 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
                 if ignore && (default.is_some() || into.is_some() || from.is_some()) {
                     return Err(syn::Error::new(
                         default.span(),
-                        "'default', 'to', and 'from' are not (yet) supported on padding",
+                        "'default', 'into', and 'from' are not (yet) supported on padding",
                     ));
                 }
 
                 if let Some(default) = default {
                     ret.default = default;
                 }
-                if let Some(to) = into {
-                    ret.into = to;
+                if let Some(into) = into {
+                    ret.into = into;
                 }
                 if let Some(from) = from {
+                    // Auto-conversion from zero
+                    if ret.default.is_empty() {
+                        ret.default = quote!({
+                            let this = 0;
+                            #from
+                        });
+                    }
+
                     ret.from = from;
                 }
             }
