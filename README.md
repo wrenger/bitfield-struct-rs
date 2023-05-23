@@ -20,7 +20,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-bitfield-struct = "0.4"
+bitfield-struct = "0.5"
 ```
 
 ## Basics
@@ -88,7 +88,7 @@ The example below shows how attributes are carried over and how signed integers,
 struct MyBitfield {
     /// defaults to 16 bits for u16
     int: u16,
-    /// interpreted as 1 bit flag, with custom default
+    /// interpreted as 1 bit flag, with a custom default value
     #[bits(default = true)]
     flag: bool,
     /// custom bit size
@@ -97,8 +97,10 @@ struct MyBitfield {
     /// sign extend for signed integers
     #[bits(13)]
     negative: i16,
-    /// supports any type, with default/to/from expressions (that are const eval)
-    #[bits(16, default = CustomEnum::A, into = this as _, from = CustomEnum::from_bits(this))]
+    /// supports any type, with `into`/`from` expressions (that are const eval)
+    ///
+    /// the field is initialized with 0 (passed into `from`) if not specified otherwise
+    #[bits(16, into = this as _, from = CustomEnum::from_bits(this))]
     custom: CustomEnum,
     /// public field -> public accessor functions
     #[bits(12)]
