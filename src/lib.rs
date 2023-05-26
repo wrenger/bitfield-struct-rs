@@ -98,7 +98,7 @@
 //!     pub public: usize,
 //!     /// padding
 //!     #[bits(5)]
-//!     _p: u8,
+//!     __: u8,
 //! }
 //!
 //! /// A custom enum
@@ -292,10 +292,11 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         #vis struct #name(#ty);
 
         impl #name {
-            /// Creates a new zero initialized bitfield.
+            /// Creates a new default initialized bitfield.
             #vis const fn new() -> Self {
-                Self(0)
+                let mut this = Self(0);
                 #( #defaults )*
+                this
             }
 
             #( #members )*
@@ -321,6 +322,7 @@ struct Member {
     offset: usize,
     bits: usize,
     base_ty: syn::Type,
+    default: TokenStream,
     inner: Option<MemberInner>,
 }
 
@@ -329,7 +331,6 @@ struct MemberInner {
     ty: syn::Type,
     attrs: Vec<syn::Attribute>,
     vis: syn::Visibility,
-    default: TokenStream,
     into: TokenStream,
     from: TokenStream,
 }
@@ -352,18 +353,21 @@ impl Member {
         let Field {
             bits,
             ty,
-            class: _,
-            default,
+            mut default,
             into,
             from,
         } = parse_field(&attrs, &ty, ignore)?;
 
         if bits > 0 && !ignore {
-            if default.is_empty() || into.is_empty() || from.is_empty() {
+            if into.is_empty() || from.is_empty() {
                 return Err(syn::Error::new(
                     ty.span(),
                     "Custom types require 'into', and 'from' in the #[bits] attribute",
                 ));
+            }
+
+            if default.is_empty() {
+                default = quote!(#ty::from_bits(0));
             }
 
             // remove our attribute
@@ -373,21 +377,26 @@ impl Member {
                 offset,
                 bits,
                 base_ty,
+                default,
                 inner: Some(MemberInner {
                     ident,
                     ty,
                     attrs,
                     vis,
-                    default,
                     into,
                     from,
                 }),
             })
         } else {
+            if default.is_empty() {
+                default = quote!(0);
+            }
+
             Ok(Self {
                 offset,
                 bits,
                 base_ty,
+                default,
                 inner: None,
             })
         }
@@ -399,18 +408,20 @@ impl Member {
             let ident = &inner.ident;
             quote!(.field(#ident_str, &self.#ident()))
         } else {
-            Default::default()
+            quote!()
         }
     }
 
     fn default(&self) -> TokenStream {
+        let default = &self.default;
         if let Some(inner) = &self.inner {
             let ident = &inner.ident;
             let with_ident = format_ident!("with_{ident}");
-            let default = &inner.default;
-            quote!(.#with_ident(#default))
+            quote!(this = this.#with_ident(#default);)
         } else {
-            Default::default()
+            let offset = self.offset;
+            let base_ty = &self.base_ty;
+            quote!(this.0 |= (#default as #base_ty) << #offset;)
         }
     }
 }
@@ -421,7 +432,8 @@ impl ToTokens for Member {
             offset,
             bits,
             base_ty,
-            inner: Some(MemberInner { ident, ty, attrs, vis, default: _, into, from }),
+            default: _,
+            inner: Some(MemberInner { ident, ty, attrs, vis, into, from }),
         } = self else {
             return Default::default();
         };
@@ -441,23 +453,12 @@ impl ToTokens for Member {
             .map(ToTokens::to_token_stream)
             .collect();
 
-        let general = quote! {
-            const #bits_ident: usize = #bits;
-            const #offset_ident: usize = #offset;
-
-            #doc
-            #[doc = #location]
-            #vis fn #set_ident(&mut self, value: #ty) {
-                *self = self.#with_ident(value);
-            }
-        };
-
-        let bits = *bits as u32;
-        let mask: u128 = !0 >> (u128::BITS - bits);
+        let mask: u128 = !0 >> (u128::BITS - *bits as u32);
         let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
 
         let code = quote! {
-            #general
+            const #bits_ident: usize = #bits;
+            const #offset_ident: usize = #offset;
 
             #doc
             #[doc = #location]
@@ -475,6 +476,12 @@ impl ToTokens for Member {
                 let this = (self.0 >> #offset) & #mask;
                 #from
             }
+            #doc
+            #[doc = #location]
+            #vis fn #set_ident(&mut self, value: #ty) {
+                *self = self.#with_ident(value);
+            }
+
         };
         tokens.extend(code);
     }
@@ -497,7 +504,6 @@ enum TypeClass {
 struct Field {
     bits: usize,
     ty: syn::Type,
-    class: TypeClass,
 
     default: TokenStream,
     into: TokenStream,
@@ -517,7 +523,6 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
         TypeClass::Bool => Field {
             bits: ty_bits,
             ty: ty.clone(),
-            class,
             default: quote!(false),
             into: quote!(this as _),
             from: quote!(this != 0),
@@ -525,7 +530,6 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
         TypeClass::SInt => Field {
             bits: ty_bits,
             ty: ty.clone(),
-            class,
             default: quote!(0),
             into: TokenStream::new(),
             from: TokenStream::new(),
@@ -533,7 +537,6 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
         TypeClass::UInt => Field {
             bits: ty_bits,
             ty: ty.clone(),
-            class,
             default: quote!(0),
             into: quote!(this as _),
             from: quote!(this as _),
@@ -541,8 +544,7 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
         TypeClass::Other => Field {
             bits: ty_bits,
             ty: ty.clone(),
-            class,
-            default: quote!(#ty::from_bits(0)),
+            default: TokenStream::new(),
             into: quote!(#ty::into_bits(this)),
             from: quote!(#ty::from_bits(this)),
         },
@@ -572,10 +574,10 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
                     }
                     ret.bits = bits;
                 }
-                if ignore && (default.is_some() || into.is_some() || from.is_some()) {
+                if ignore && (into.is_some() || from.is_some()) {
                     return Err(syn::Error::new(
                         default.span(),
-                        "'default', 'into', and 'from' are not (yet) supported on padding",
+                        "'into' and 'from' are not supported on padding",
                     ));
                 }
 
@@ -606,9 +608,9 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
     }
 
     // Negative integers need some special handling...
-    if !ignore && ret.class == TypeClass::SInt {
+    if !ignore && class == TypeClass::SInt {
         let bits = ret.bits as u32;
-        let mask: u128 = !0 >> (u128::BITS - bits);
+        let mask: u128 = !0 >> (u128::BITS - ret.bits as u32);
         let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
         if ret.into.is_empty() {
             // Bounds check and remove leading ones from negative values
@@ -659,7 +661,6 @@ impl Parse for BitsAttr {
 
                 <Token![=]>::parse(input)?;
 
-
                 if ident == "default" {
                     attr.default = Some(input.parse()?);
                 } else if ident == "into" {
@@ -677,32 +678,6 @@ impl Parse for BitsAttr {
         }
         Ok(attr)
     }
-}
-
-/// Returns the number of bits for a given type
-fn type_bits(ty: &syn::Type) -> (TypeClass, usize) {
-    let syn::Type::Path(syn::TypePath{ path, .. }) = ty else {
-        return (TypeClass::Other, 0);
-    };
-    let Some(ident) = path.get_ident() else {
-        return (TypeClass::Other, 0);
-    };
-    if ident == "bool" {
-        return (TypeClass::Bool, 1);
-    }
-    if ident == "isize" || ident == "usize" {
-        return (TypeClass::UInt, 0); // they have architecture dependend sizes
-    }
-    macro_rules! integer {
-        ($ident:ident => $($uint:ident),* ; $($sint:ident),*) => {
-            match ident {
-                $(_ if ident == stringify!($uint) => (TypeClass::UInt, $uint::BITS as _),)*
-                $(_ if ident == stringify!($sint) => (TypeClass::SInt, $sint::BITS as _),)*
-                _ => (TypeClass::Other, 0)
-            }
-        };
-    }
-    integer!(ident => u8, u16, u32, u64, u128 ; i8, i16, i32, i64, i128)
 }
 
 /// The bitfield macro parameters
@@ -738,6 +713,32 @@ impl Parse for Params {
 
         Ok(Params { bits, ty, debug })
     }
+}
+
+/// Returns the number of bits for a given type
+fn type_bits(ty: &syn::Type) -> (TypeClass, usize) {
+    let syn::Type::Path(syn::TypePath{ path, .. }) = ty else {
+        return (TypeClass::Other, 0);
+    };
+    let Some(ident) = path.get_ident() else {
+        return (TypeClass::Other, 0);
+    };
+    if ident == "bool" {
+        return (TypeClass::Bool, 1);
+    }
+    if ident == "isize" || ident == "usize" {
+        return (TypeClass::UInt, 0); // they have architecture dependend sizes
+    }
+    macro_rules! integer {
+        ($ident:ident => $($uint:ident),* ; $($sint:ident),*) => {
+            match ident {
+                $(_ if ident == stringify!($uint) => (TypeClass::UInt, $uint::BITS as _),)*
+                $(_ if ident == stringify!($sint) => (TypeClass::SInt, $sint::BITS as _),)*
+                _ => (TypeClass::Other, 0)
+            }
+        };
+    }
+    integer!(ident => u8, u16, u32, u64, u128 ; i8, i16, i32, i64, i128)
 }
 
 #[cfg(test)]

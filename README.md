@@ -108,7 +108,7 @@ struct MyBitfield {
     pub public: usize,
     /// padding
     #[bits(5)]
-    _p: u8,
+    __: u8,
 }
 
 /// A custom enum
