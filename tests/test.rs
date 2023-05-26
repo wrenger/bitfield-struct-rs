@@ -29,7 +29,7 @@ fn members() {
         pub public: usize,
         /// padding
         #[bits(5)]
-        _p: (),
+        __: (),
     }
 
     /// A custom enum
@@ -175,4 +175,66 @@ fn entirely_negative() {
     assert_eq!(v.negative(), i32::MIN);
     let v = MyBitfield::new().with_negative(i32::MAX);
     assert_eq!(v.negative(), i32::MAX);
+}
+
+#[test]
+fn defaults() {
+    #[bitfield(u16)]
+    #[derive(PartialEq, Eq)]
+    struct MyBitfield {
+        /// Interpreted as 1-bit flag, with custom default
+        #[bits(default = true)]
+        flag: bool,
+        /// Supports any type, with default/to/from expressions (that are const eval)
+        /// - into/from call #ty::into_bits/#ty::from_bits if nothing else is specified
+        #[bits(13, default = CustomEnum::B, from = CustomEnum::my_from_bits)]
+        custom: CustomEnum,
+        // Padding with default
+        #[bits(2, default = 0b10)]
+        __: (),
+    }
+
+    /// A custom enum
+    #[derive(Debug, PartialEq, Eq)]
+    #[repr(u16)]
+    enum CustomEnum {
+        A = 0,
+        B = 1,
+        C = 2,
+    }
+    impl CustomEnum {
+        // This has to be const eval
+        const fn into_bits(self) -> u16 {
+            self as _
+        }
+        const fn my_from_bits(value: u16) -> Self {
+            match value {
+                0 => Self::A,
+                1 => Self::B,
+                _ => Self::C,
+            }
+        }
+    }
+
+    // Uses defaults
+    let val = MyBitfield::new();
+
+    assert_eq!(val.flag(), true);
+    assert_eq!(val.custom(), CustomEnum::B);
+    assert_eq!(val.0 >> 14, 0b10); // padding
+}
+
+#[test]
+fn default_padding() {
+    #[bitfield(u32)]
+    struct MyBitfield {
+        value: u16,
+        #[bits(15, default = 0xfff)]
+        __: (),
+        #[bits(default = true)]
+        __: bool,
+    }
+    let v = MyBitfield::new().with_value(0xff);
+
+    assert_eq!(v.0, 0x8fff_00ff);
 }
