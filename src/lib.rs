@@ -307,6 +307,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         #vis struct #name(#ty);
 
         impl #name {
+            /// Creates a new zero initialized bitfield.
             #vis const fn new() -> Self {
                 Self(0)
             }
