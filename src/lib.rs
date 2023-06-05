@@ -469,7 +469,11 @@ impl ToTokens for Member {
                 #[doc = #location]
                 #vis const fn #with_ident(self, value: #ty) -> Self {
                     #[allow(unused_comparisons)]
-                    debug_assert!(if value >= 0 { value & !#mask == 0 } else { !value & !#mask == 0 }, "value out of bounds");
+                    #[allow(clippy::bad_bit_mask)]
+                    {
+                        debug_assert!(if value >= 0 { value & !#mask == 0 } else { !value & !#mask == 0 }, "value out of bounds");
+                    }
+
                     Self(self.0 & !(#mask << #offset) | (value as #base_ty & #mask) << #offset)
                 }
                 #doc
@@ -487,7 +491,11 @@ impl ToTokens for Member {
                 #vis fn #with_ident(self, value: #ty) -> Self {
                     let value: #base_ty = value.into();
                     #[allow(unused_comparisons)]
-                    debug_assert!(if value >= 0 { value & !#mask == 0 } else { !value & !#mask == 0 }, "value out of bounds");
+                    #[allow(clippy::bad_bit_mask)]
+                    {
+                        debug_assert!(if value >= 0 { value & !#mask == 0 } else { !value & !#mask == 0 }, "value out of bounds");
+                    }
+
                     Self(self.0 & !(#mask << #offset) | (value & #mask) << #offset)
                 }
                 #doc
