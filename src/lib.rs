@@ -467,6 +467,7 @@ impl ToTokens for Member {
                     let this = value;
                     #into
                 };
+                #[allow(unused_comparisons)]
                 debug_assert!(value <= #mask, "value out of bounds");
                 Self(self.0 & !(#mask << #offset) | (value & #mask) << #offset)
             }
@@ -558,6 +559,7 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
                 meta: syn::Meta::List(syn::MetaList { path, tokens, .. }),
                 ..
             } if path.is_ident("bits") => {
+                let span = tokens.span();
                 let BitsAttr {
                     bits,
                     default,
@@ -567,10 +569,10 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
 
                 if let Some(bits) = bits {
                     if bits == 0 {
-                        return Err(syn::Error::new(tokens.span(), "bits cannot bit 0"));
+                        return Err(syn::Error::new(span, "bits cannot bit 0"));
                     }
                     if ty_bits != 0 && bits > ty_bits {
-                        return Err(syn::Error::new(tokens.span(), "overflowing field type"));
+                        return Err(syn::Error::new(span, "overflowing field type"));
                     }
                     ret.bits = bits;
                 }
@@ -607,7 +609,7 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
         ));
     }
 
-    // Negative integers need some special handling...
+    // Signed integers need some special handling...
     if !ignore && class == TypeClass::SInt {
         let bits = ret.bits as u32;
         let mask: u128 = !0 >> (u128::BITS - ret.bits as u32);
