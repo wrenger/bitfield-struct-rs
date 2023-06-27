@@ -87,11 +87,16 @@ fn members() {
 
 #[test]
 fn attrs() {
-    /// We have a custom debug implementation -> opt out
-    #[bitfield(u64)]
+    /// We have a custom default
+    #[bitfield(u64, impl_default = false)]
     #[derive(PartialEq, Eq)]
     struct Full {
         data: u64,
+    }
+    impl Default for Full {
+        fn default() -> Self {
+            Self(0)
+        }
     }
 
     let full = Full::default();

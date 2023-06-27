@@ -229,7 +229,12 @@ pub fn bitfield(args: pc::TokenStream, input: pc::TokenStream) -> pc::TokenStrea
 
 fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     let input = syn::parse2::<syn::ItemStruct>(input)?;
-    let Params { ty, bits, debug } = syn::parse2::<Params>(args)?;
+    let Params {
+        ty,
+        bits,
+        debug,
+        impl_default,
+    } = syn::parse2::<Params>(args)?;
 
     let span = input.fields.span();
     let name = input.ident;
@@ -285,6 +290,18 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
     let defaults = members.iter().map(|m| m.default());
 
+    let default_impl = if impl_default {
+        quote! {
+            impl Default for #name {
+                fn default() -> Self {
+                    Self::new()
+                }
+            }
+        }
+    } else {
+        TokenStream::new()
+    };
+
     Ok(quote! {
         #attrs
         #[derive(Copy, Clone)]
@@ -302,11 +319,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             #( #members )*
         }
 
-        impl Default for #name {
-            fn default() -> Self {
-                Self::new()
-            }
-        }
+        #default_impl
 
         impl From<#ty> for #name {
             fn from(v: #ty) -> Self {
@@ -693,6 +706,7 @@ struct Params {
     ty: syn::Type,
     bits: usize,
     debug: bool,
+    impl_default: bool,
 }
 
 impl Parse for Params {
@@ -705,21 +719,29 @@ impl Parse for Params {
             return Err(syn::Error::new(input.span(), "unsupported type"));
         }
 
-        // try parse additional debug arg
-        let debug = if <Token![,]>::parse(input).is_ok() {
-            let ident = Ident::parse(input)?;
+        let mut debug = true;
+        let mut impl_default = true;
 
-            if ident != "debug" {
+        // try parse additional args
+        while <Token![,]>::parse(input).is_ok() {
+            let ident = Ident::parse(input)?;
+            <Token![=]>::parse(input)?;
+            let value = syn::LitBool::parse(input)?.value;
+            if ident == "debug" {
+                debug = value;
+            } else if ident == "impl_default" {
+                impl_default = value;
+            } else {
                 return Err(syn::Error::new(ident.span(), "unknown argument"));
             }
-            <Token![=]>::parse(input)?;
+        }
 
-            syn::LitBool::parse(input)?.value
-        } else {
-            true
-        };
-
-        Ok(Params { bits, ty, debug })
+        Ok(Params {
+            bits,
+            ty,
+            debug,
+            impl_default,
+        })
     }
 }
 
