@@ -188,14 +188,14 @@ impl Debug for MyBitfield { /* ... */ }
 
 > Hint: You can use the rust-analyzer "Expand macro recursively" action to view the generated code.
 
-## `fmt::Debug`
 
-This macro automatically creates a suitable `fmt::Debug` implementation
-similar to the ones created for normal structs by `#[derive(Debug)]`.
-You can disable it with the extra debug argument.
+## `fmt::Debug` and `Default`
 
-```rust
-#[bitfield(u64, debug = false)]
+This macro automatically creates a suitable `fmt::Debug` and `Default` implementations similar to the ones created for normal structs by `#[derive(Debug, Default)]`.
+You can disable this with the extra `debug` and `default` arguments.
+
+```rs
+#[bitfield(u64, debug = false, default = false)]
 struct CustomDebug {
     data: u64
 }
@@ -204,7 +204,12 @@ impl fmt::Debug for CustomDebug {
         write!(f, "0x{:x}", self.data())
     }
 }
+impl Default for CustomDebug {
+    fn default() -> Self {
+        Self(123) // note: you can also use `#[bits(64, default = 123)]`
+    }
+}
 
-let val = CustomDebug::new().with_data(123);
+let val = CustomDebug::default();
 println!("{val:?}")
 ```

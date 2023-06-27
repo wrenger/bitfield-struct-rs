@@ -88,7 +88,7 @@ fn members() {
 #[test]
 fn attrs() {
     /// We have a custom default
-    #[bitfield(u64, impl_default = false)]
+    #[bitfield(u64, default = false)]
     #[derive(PartialEq, Eq)]
     struct Full {
         data: u64,

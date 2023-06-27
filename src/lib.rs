@@ -178,17 +178,16 @@
 //!
 //! > Hint: You can use the rust-analyzer "Expand macro recursively" action to view the generated code.
 //!
-//! ## `fmt::Debug`
+//! ## `fmt::Debug` and `Default`
 //!
-//! This macro automatically creates a suitable `fmt::Debug` implementation
-//! similar to the ones created for normal structs by `#[derive(Debug)]`.
-//! You can disable it with the extra debug argument.
+//! This macro automatically creates a suitable `fmt::Debug` and `Default` implementations
+//! similar to the ones created for normal structs by `#[derive(Debug, Default)]`.
+//! You can disable this with the extra `debug` and `default` arguments.
 //!
 //! ```
 //! # use std::fmt;
 //! # use bitfield_struct::bitfield;
-//!
-//! #[bitfield(u64, debug = false)]
+//! #[bitfield(u64, debug = false, default = false)]
 //! struct CustomDebug {
 //!     data: u64
 //! }
@@ -199,7 +198,13 @@
 //!     }
 //! }
 //!
-//! let val = CustomDebug::new().with_data(123);
+//! impl Default for CustomDebug {
+//!     fn default() -> Self {
+//!         Self(123) // note: you can also use `#[bits(64, default = 123)]`
+//!     }
+//! }
+//!
+//! let val = CustomDebug::default();
 //! println!("{val:?}")
 //! ```
 //!
@@ -233,7 +238,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         ty,
         bits,
         debug,
-        impl_default,
+        default,
     } = syn::parse2::<Params>(args)?;
 
     let span = input.fields.span();
@@ -290,7 +295,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
     let defaults = members.iter().map(|m| m.default());
 
-    let default_impl = if impl_default {
+    let default_impl = if default {
         quote! {
             impl Default for #name {
                 fn default() -> Self {
@@ -706,7 +711,7 @@ struct Params {
     ty: syn::Type,
     bits: usize,
     debug: bool,
-    impl_default: bool,
+    default: bool,
 }
 
 impl Parse for Params {
@@ -720,7 +725,7 @@ impl Parse for Params {
         }
 
         let mut debug = true;
-        let mut impl_default = true;
+        let mut default = true;
 
         // try parse additional args
         while <Token![,]>::parse(input).is_ok() {
@@ -729,8 +734,8 @@ impl Parse for Params {
             let value = syn::LitBool::parse(input)?.value;
             if ident == "debug" {
                 debug = value;
-            } else if ident == "impl_default" {
-                impl_default = value;
+            } else if ident == "default" {
+                default = value;
             } else {
                 return Err(syn::Error::new(ident.span(), "unknown argument"));
             }
@@ -740,7 +745,7 @@ impl Parse for Params {
             bits,
             ty,
             debug,
-            impl_default,
+            default,
         })
     }
 }
