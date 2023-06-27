@@ -302,6 +302,12 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             #( #members )*
         }
 
+        impl Default for #name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
         impl From<#ty> for #name {
             fn from(v: #ty) -> Self {
                 Self(v)

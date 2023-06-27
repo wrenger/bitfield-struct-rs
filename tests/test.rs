@@ -89,7 +89,7 @@ fn members() {
 fn attrs() {
     /// We have a custom debug implementation -> opt out
     #[bitfield(u64)]
-    #[derive(PartialEq, Eq, Default)]
+    #[derive(PartialEq, Eq)]
     struct Full {
         data: u64,
     }
