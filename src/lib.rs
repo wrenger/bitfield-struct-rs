@@ -178,6 +178,66 @@
 //!
 //! > Hint: You can use the rust-analyzer "Expand macro recursively" action to view the generated code.
 //!
+//! ### Bit Order
+//!
+//! The optional `order` macro argument determines the layout of the bits, with the default being
+//! Lsb first:
+//!
+//! ```
+//! # use bitfield_struct::bitfield;
+//! #[bitfield(u8, order = Lsb)]
+//! struct MyLsbByte {
+//!     /// The first field occupies the least significant bits
+//!     #[bits(4)]
+//!     kind: usize,
+//!     /// Booleans are 1 bit large
+//!     system: bool,
+//!     /// The bits attribute specifies the bit size of this field
+//!     #[bits(2)]
+//!     level: usize,
+//!     /// The last field spans over the most significant bits
+//!     present: bool
+//! }
+//!
+//! let my_byte_lsb = MyLsbByte::new()
+//!     .with_kind(10)
+//!     .with_system(false)
+//!     .with_level(2)
+//!     .with_present(true);
+//!
+//! //                         .- present
+//! //                         | .- level
+//! //                         | |  .- system
+//! //                         | |  | .- kind
+//! assert!(my_byte_lsb.0 == 0b1_10_0_1010);
+//!
+//! #[bitfield(u8, order = Msb)]
+//! struct MyMsbByte {
+//!     /// The first field occupies the least significant bits
+//!     #[bits(4)]
+//!     kind: usize,
+//!     /// Booleans are 1 bit large
+//!     system: bool,
+//!     /// The bits attribute specifies the bit size of this field
+//!     #[bits(2)]
+//!     level: usize,
+//!     /// The last field spans over the most significant bits
+//!     present: bool
+//! }
+//!
+//! let my_byte_msb = MyMsbByte::new()
+//!     .with_kind(10)
+//!     .with_system(false)
+//!     .with_level(2)
+//!     .with_present(true);
+//!
+//! //                         .- kind
+//! //                         |    .- system
+//! //                         |    | .- level
+//! //                         |    | |  .- present
+//! assert!(my_byte_msb.0 == 0b1010_0_10_1);
+//! ```
+//!
 //! ## `fmt::Debug` and `Default`
 //!
 //! This macro automatically creates a suitable `fmt::Debug` and `Default` implementations
@@ -239,6 +299,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         bits,
         debug,
         default,
+        order,
     } = syn::parse2::<Params>(args)?;
 
     let span = input.fields.span();
@@ -254,7 +315,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let mut offset = 0;
     let mut members = Vec::with_capacity(fields.named.len());
     for field in fields.named {
-        let f = Member::new(ty.clone(), field, offset)?;
+        let f = Member::new(ty.clone(), bits, field, offset, order)?;
         offset += f.bits;
         members.push(f);
     }
@@ -360,7 +421,13 @@ struct MemberInner {
 }
 
 impl Member {
-    fn new(base_ty: syn::Type, f: syn::Field, offset: usize) -> syn::Result<Self> {
+    fn new(
+        base_ty: syn::Type,
+        base_bits: usize,
+        f: syn::Field,
+        offset: usize,
+        order: Order,
+    ) -> syn::Result<Self> {
         let span = f.span();
 
         let syn::Field {
@@ -383,6 +450,20 @@ impl Member {
         } = parse_field(&attrs, &ty, ignore)?;
 
         if bits > 0 && !ignore {
+            if offset + bits > base_bits {
+                return Err(syn::Error::new(
+                    ty.span(),
+                    "The total size of the members is too large!",
+                ));
+            };
+
+            // compute the offset
+            let offset = if order == Order::Lsb {
+                offset
+            } else {
+                base_bits - offset - bits
+            };
+
             if into.is_empty() || from.is_empty() {
                 return Err(syn::Error::new(
                     ty.span(),
@@ -706,12 +787,19 @@ impl Parse for BitsAttr {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Order {
+    Lsb,
+    Msb,
+}
+
 /// The bitfield macro parameters
 struct Params {
     ty: syn::Type,
     bits: usize,
     debug: bool,
     default: bool,
+    order: Order,
 }
 
 impl Parse for Params {
@@ -726,19 +814,31 @@ impl Parse for Params {
 
         let mut debug = true;
         let mut default = true;
+        let mut order = Order::Lsb;
 
         // try parse additional args
         while <Token![,]>::parse(input).is_ok() {
             let ident = Ident::parse(input)?;
             <Token![=]>::parse(input)?;
-            let value = syn::LitBool::parse(input)?.value;
-            if ident == "debug" {
-                debug = value;
-            } else if ident == "default" {
-                default = value;
-            } else {
-                return Err(syn::Error::new(ident.span(), "unknown argument"));
-            }
+            match ident.to_string().as_str() {
+                "debug" => {
+                    let value = syn::LitBool::parse(input)?.value;
+                    debug = value;
+                }
+                "default" => {
+                    let value = syn::LitBool::parse(input)?.value;
+                    default = value;
+                }
+                "order" => {
+                    let value = match syn::Ident::parse(input)?.to_string().as_str() {
+                        "Msb" | "msb" => Order::Msb,
+                        "Lsb" | "lsb" => Order::Lsb,
+                        _ => return Err(syn::Error::new(ident.span(), "unknown value for order")),
+                    };
+                    order = value
+                }
+                _ => return Err(syn::Error::new(ident.span(), "unknown argument")),
+            };
         }
 
         Ok(Params {
@@ -746,6 +846,7 @@ impl Parse for Params {
             ty,
             debug,
             default,
+            order,
         })
     }
 }

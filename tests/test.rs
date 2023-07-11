@@ -243,3 +243,33 @@ fn default_padding() {
 
     assert_eq!(v.0, 0x8fff_00ff);
 }
+
+#[test]
+fn lsb_order() {
+    #[bitfield(u32, order=lsb)]
+    struct MyBitfield {
+        short: u16,
+        #[bits(8)]
+        __: (),
+        byte: u8,
+    }
+
+    let v = MyBitfield::new().with_short(0xe11e).with_byte(0xf0);
+
+    assert_eq!(v.0, 0xf0_00_e11e);
+}
+
+#[test]
+fn msb_order() {
+    #[bitfield(u32, order=msb)]
+    struct MyBitfield {
+        short: u16,
+        #[bits(8)]
+        __: (),
+        byte: u8,
+    }
+
+    let v = MyBitfield::new().with_short(0xe11e).with_byte(0xf0);
+
+    assert_eq!(v.0, 0xe11e_00_f0);
+}
