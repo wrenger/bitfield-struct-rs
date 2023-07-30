@@ -188,6 +188,64 @@ impl Debug for MyBitfield { /* ... */ }
 
 > Hint: You can use the rust-analyzer "Expand macro recursively" action to view the generated code.
 
+## Bit Order
+
+The optional `order` macro argument determines the layout of the bits, with the default being
+Lsb (least significant bit) first:
+
+```rust
+# use bitfield_struct::bitfield;
+#[bitfield(u8, order = Lsb)]
+struct MyLsbByte {
+    /// The first field occupies the least significant bits
+    #[bits(4)]
+    kind: usize,
+    system: bool,
+    #[bits(2)]
+    level: usize,
+    present: bool
+}
+
+let my_byte_lsb = MyLsbByte::new()
+    .with_kind(10)
+    .with_system(false)
+    .with_level(2)
+    .with_present(true);
+
+//                         .- present
+//                         | .- level
+//                         | |  .- system
+//                         | |  | .- kind
+assert!(my_byte_lsb.0 == 0b1_10_0_1010);
+```
+
+The macro generates the reverse order when Msb (most significant bit) is specified:
+
+```rust
+# use bitfield_struct::bitfield;
+#[bitfield(u8, order = Msb)]
+struct MyMsbByte {
+    /// The first field occupies the most significant bits
+    #[bits(4)]
+    kind: usize,
+    system: bool,
+    #[bits(2)]
+    level: usize,
+    present: bool
+}
+
+let my_byte_msb = MyMsbByte::new()
+    .with_kind(10)
+    .with_system(false)
+    .with_level(2)
+    .with_present(true);
+
+//                         .- kind
+//                         |    .- system
+//                         |    | .- level
+//                         |    | |  .- present
+assert!(my_byte_msb.0 == 0b1010_0_10_1);
+```
 
 ## `fmt::Debug` and `Default`
 
