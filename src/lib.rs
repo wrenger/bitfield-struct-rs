@@ -178,10 +178,10 @@
 //!
 //! > Hint: You can use the rust-analyzer "Expand macro recursively" action to view the generated code.
 //!
-//! ### Bit Order
+//! ## Bit Order
 //!
 //! The optional `order` macro argument determines the layout of the bits, with the default being
-//! Lsb first:
+//! Lsb (least significant bit) first:
 //!
 //! ```
 //! # use bitfield_struct::bitfield;
@@ -190,12 +190,9 @@
 //!     /// The first field occupies the least significant bits
 //!     #[bits(4)]
 //!     kind: usize,
-//!     /// Booleans are 1 bit large
 //!     system: bool,
-//!     /// The bits attribute specifies the bit size of this field
 //!     #[bits(2)]
 //!     level: usize,
-//!     /// The last field spans over the most significant bits
 //!     present: bool
 //! }
 //!
@@ -210,18 +207,20 @@
 //! //                         | |  .- system
 //! //                         | |  | .- kind
 //! assert!(my_byte_lsb.0 == 0b1_10_0_1010);
+//! ```
 //!
+//! The macro generates the reverse order when Msb (most significant bit) is specified:
+//!
+//! ```
+//! # use bitfield_struct::bitfield;
 //! #[bitfield(u8, order = Msb)]
 //! struct MyMsbByte {
-//!     /// The first field occupies the least significant bits
+//!     /// The first field occupies the most significant bits
 //!     #[bits(4)]
 //!     kind: usize,
-//!     /// Booleans are 1 bit large
 //!     system: bool,
-//!     /// The bits attribute specifies the bit size of this field
 //!     #[bits(2)]
 //!     level: usize,
-//!     /// The last field spans over the most significant bits
 //!     present: bool
 //! }
 //!
@@ -242,7 +241,7 @@
 //!
 //! This macro automatically creates a suitable `fmt::Debug` and `Default` implementations
 //! similar to the ones created for normal structs by `#[derive(Debug, Default)]`.
-//! You can disable this with the extra `debug` and `default` arguments.
+//! You can disable these with the extra `debug` and `default` arguments.
 //!
 //! ```
 //! # use std::fmt;
@@ -268,6 +267,8 @@
 //! println!("{val:?}")
 //! ```
 //!
+
+#![warn(clippy::unwrap_used)]
 
 use proc_macro as pc;
 use proc_macro2::{Ident, Span, TokenStream};
@@ -340,7 +341,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     }
 
     let debug_impl = if debug {
-        let debug_fields = members.iter().map(|m| m.debug());
+        let debug_fields = members.iter().map(Member::debug);
         quote! {
             impl core::fmt::Debug for #name {
                 fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -351,10 +352,10 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             }
         }
     } else {
-        Default::default()
+        TokenStream::default()
     };
 
-    let defaults = members.iter().map(|m| m.default());
+    let defaults = members.iter().map(Member::default);
 
     let default_impl = if default {
         quote! {
@@ -558,7 +559,7 @@ impl ToTokens for Member {
             .map(ToTokens::to_token_stream)
             .collect();
 
-        let mask: u128 = !0 >> (u128::BITS - *bits as u32);
+        let mask = u128::MAX >> (u128::BITS - *bits as u32);
         let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
 
         let code = quote! {
@@ -658,52 +659,52 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
 
     // Find and parse the bits attribute
     for attr in attrs {
-        match attr {
-            syn::Attribute {
+        let syn::Attribute {
                 style: syn::AttrStyle::Outer,
                 meta: syn::Meta::List(syn::MetaList { path, tokens, .. }),
                 ..
-            } if path.is_ident("bits") => {
-                let span = tokens.span();
-                let BitsAttr {
-                    bits,
-                    default,
-                    into,
-                    from,
-                } = syn::parse2::<BitsAttr>(tokens.clone()).map_err(|e| malformed(e, attr))?;
+        } = attr else {
+            continue
+        };
+        if path.is_ident("bits") {
+            let span = tokens.span();
+            let BitsAttr {
+                bits,
+                default,
+                into,
+                from,
+            } = syn::parse2(tokens.clone()).map_err(|e| malformed(e, attr))?;
 
-                if let Some(bits) = bits {
-                    if bits == 0 {
-                        return Err(syn::Error::new(span, "bits cannot bit 0"));
-                    }
-                    if ty_bits != 0 && bits > ty_bits {
-                        return Err(syn::Error::new(span, "overflowing field type"));
-                    }
-                    ret.bits = bits;
+            if let Some(bits) = bits {
+                if bits == 0 {
+                    return Err(syn::Error::new(span, "bits cannot bit 0"));
                 }
-                if ignore && (into.is_some() || from.is_some()) {
-                    return Err(syn::Error::new(
-                        default.span(),
-                        "'into' and 'from' are not supported on padding",
-                    ));
+                if ty_bits != 0 && bits > ty_bits {
+                    return Err(syn::Error::new(span, "overflowing field type"));
                 }
-
-                if let Some(into) = into {
-                    ret.into = quote!(#into(this));
-                }
-                if let Some(from) = from {
-                    // Auto-conversion from zero
-                    if default.is_none() {
-                        ret.default = quote!(#from(0));
-                    }
-
-                    ret.from = quote!(#from(this));
-                }
-                if let Some(default) = default {
-                    ret.default = default.into_token_stream();
-                }
+                ret.bits = bits;
             }
-            _ => {}
+            if ignore && (into.is_some() || from.is_some()) {
+                return Err(syn::Error::new(
+                    default.span(),
+                    "'into' and 'from' are not supported on padding",
+                ));
+            }
+
+            if let Some(into) = into {
+                ret.into = quote!(#into(this));
+            }
+            if let Some(from) = from {
+                // Auto-conversion from zero
+                if default.is_none() {
+                    ret.default = quote!(#from(0));
+                }
+
+                ret.from = quote!(#from(this));
+            }
+            if let Some(default) = default {
+                ret.default = default.into_token_stream();
+            }
         }
     }
 
@@ -717,7 +718,7 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
     // Signed integers need some special handling...
     if !ignore && class == TypeClass::SInt {
         let bits = ret.bits as u32;
-        let mask: u128 = !0 >> (u128::BITS - ret.bits as u32);
+        let mask = u128::MAX >> (u128::BITS - ret.bits as u32);
         let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
         if ret.into.is_empty() {
             // Bounds check and remove leading ones from negative values
@@ -835,15 +836,15 @@ impl Parse for Params {
                         "Lsb" | "lsb" => Order::Lsb,
                         _ => return Err(syn::Error::new(ident.span(), "unknown value for order")),
                     };
-                    order = value
+                    order = value;
                 }
                 _ => return Err(syn::Error::new(ident.span(), "unknown argument")),
             };
         }
 
         Ok(Params {
-            bits,
             ty,
+            bits,
             debug,
             default,
             order,
@@ -881,7 +882,7 @@ fn type_bits(ty: &syn::Type) -> (TypeClass, usize) {
 mod test {
     use quote::quote;
 
-    use crate::{BitsAttr, Params};
+    use crate::{BitsAttr, Order, Params};
 
     #[test]
     fn parse_args() {
@@ -892,6 +893,10 @@ mod test {
         let args = quote!(u32, debug = false);
         let params = syn::parse2::<Params>(args).unwrap();
         assert!(params.bits == u32::BITS as usize && params.debug == false);
+
+        let args = quote!(u32, order = Msb);
+        let params = syn::parse2::<Params>(args).unwrap();
+        assert!(params.bits == u32::BITS as usize && params.order == Order::Msb);
     }
 
     #[test]
