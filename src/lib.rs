@@ -568,6 +568,7 @@ impl ToTokens for Member {
 
             #doc
             #[doc = #location]
+            #[cfg_attr(debug_assertions, track_caller)]
             #vis const fn #with_ident(self, value: #ty) -> Self {
                 let value: #base_ty = {
                     let this = value;
@@ -585,6 +586,7 @@ impl ToTokens for Member {
             }
             #doc
             #[doc = #location]
+            #[cfg_attr(debug_assertions, track_caller)]
             #vis fn #set_ident(&mut self, value: #ty) {
                 *self = self.#with_ident(value);
             }
