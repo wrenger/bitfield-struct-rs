@@ -3,8 +3,8 @@
 [![Crate](https://img.shields.io/crates/v/bitfield-struct.svg)](https://crates.io/crates/bitfield-struct)
 [![API](https://docs.rs/bitfield-struct/badge.svg)](https://docs.rs/bitfield-struct)
 
-Procedural macro for declarative defining bitfields similar to structs.
-As this library provides a procedural macro, it has no runtime dependencies and works for `no-std`.
+Procedural macro for bitfields that allows specifying bitfields as structs.
+As this library provides a procedural macro, it has no runtime dependencies and works for `no-std` environments.
 
 - Supports bool flags, raw integers, and every custom type convertible into integers (structs/enums)
 - Ideal for driver/OS/embedded development (defining HW registers/structures)
@@ -12,7 +12,7 @@ As this library provides a procedural macro, it has no runtime dependencies and 
 - Compile-time checks for type and field sizes
 - Rust-analyzer friendly (carries over documentation to accessor functions)
 - Exports field offsets and sizes as constants (useful for const asserts)
-- Generation of `fmt::Debug`
+- Generation of `fmt::Debug` and `Default`
 
 ## Usage
 
