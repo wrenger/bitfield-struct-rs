@@ -727,7 +727,7 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
             // Bounds check and remove leading ones from negative values
             ret.into = quote! {{
                 #[allow(unused_comparisons)]
-                debug_assert!(if this >= 0 { this & !#mask == 0 } else { !this & !#mask == 0 }, "value out of bounds");
+                debug_assert!(if this >= 0 { this | #mask == #mask } else { !(this | #mask) == 0 }, "value out of bounds");
                 (this & #mask) as _
             }};
         }
