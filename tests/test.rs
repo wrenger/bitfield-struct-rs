@@ -132,7 +132,7 @@ fn positive() {
         #[bits(3)]
         positive: u32,
         #[bits(29)]
-        _p: (),
+        __: (),
     }
 
     let v = MyBitfield::new().with_positive(0);
@@ -150,7 +150,7 @@ fn negative() {
         #[bits(3)]
         negative: i32,
         #[bits(29)]
-        _p: (),
+        __: (),
     }
 
     let v = MyBitfield::new().with_negative(-3);
@@ -161,6 +161,34 @@ fn negative() {
     assert_eq!(v.negative(), 3);
     let v = MyBitfield::new().with_negative(-4);
     assert_eq!(v.negative(), -4);
+}
+
+#[test]
+#[should_panic]
+fn negative_pos_overflow() {
+    #[bitfield(u32)]
+    struct MyBitfield {
+        #[bits(3)]
+        negative: i32,
+        #[bits(29)]
+        __: (),
+    }
+
+    MyBitfield::new().with_negative(4);
+}
+
+#[test]
+#[should_panic]
+fn negative_neg_overflow() {
+    #[bitfield(u32)]
+    struct MyBitfield {
+        #[bits(3)]
+        negative: i32,
+        #[bits(29)]
+        __: (),
+    }
+
+    MyBitfield::new().with_negative(-5);
 }
 
 #[test]
