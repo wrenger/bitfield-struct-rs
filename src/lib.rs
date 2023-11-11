@@ -449,7 +449,7 @@ impl Member {
             mut default,
             into,
             from,
-        } = parse_field(&attrs, &ty, ignore)?;
+        } = parse_field(&base_ty, &attrs, &ty, ignore)?;
 
         if bits > 0 && !ignore {
             if offset + bits > base_bits {
@@ -540,8 +540,17 @@ impl ToTokens for Member {
             bits,
             base_ty,
             default: _,
-            inner: Some(MemberInner { ident, ty, attrs, vis, into, from }),
-        } = self else {
+            inner:
+                Some(MemberInner {
+                    ident,
+                    ty,
+                    attrs,
+                    vis,
+                    into,
+                    from,
+                }),
+        } = self
+        else {
             return Default::default();
         };
 
@@ -621,7 +630,12 @@ struct Field {
 }
 
 /// Parses the `bits` attribute that allows specifying a custom number of bits.
-fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::Result<Field> {
+fn parse_field(
+    base_ty: &syn::Type,
+    attrs: &[syn::Attribute],
+    ty: &syn::Type,
+    ignore: bool,
+) -> syn::Result<Field> {
     fn malformed(mut e: syn::Error, attr: &syn::Attribute) -> syn::Error {
         e.combine(syn::Error::new(attr.span(), "malformed #[bits] attribute"));
         e
@@ -641,8 +655,8 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
             bits: ty_bits,
             ty: ty.clone(),
             default: quote!(0),
-            into: TokenStream::new(),
-            from: TokenStream::new(),
+            into: quote!(),
+            from: quote!(),
         },
         TypeClass::UInt => Field {
             bits: ty_bits,
@@ -654,7 +668,7 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
         TypeClass::Other => Field {
             bits: ty_bits,
             ty: ty.clone(),
-            default: TokenStream::new(),
+            default: quote!(),
             into: quote!(#ty::into_bits(this)),
             from: quote!(#ty::from_bits(this)),
         },
@@ -663,11 +677,12 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
     // Find and parse the bits attribute
     for attr in attrs {
         let syn::Attribute {
-                style: syn::AttrStyle::Outer,
-                meta: syn::Meta::List(syn::MetaList { path, tokens, .. }),
-                ..
-        } = attr else {
-            continue
+            style: syn::AttrStyle::Outer,
+            meta: syn::Meta::List(syn::MetaList { path, tokens, .. }),
+            ..
+        } = attr
+        else {
+            continue;
         };
         if path.is_ident("bits") {
             let span = tokens.span();
@@ -678,6 +693,7 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
                 from,
             } = syn::parse2(tokens.clone()).map_err(|e| malformed(e, attr))?;
 
+            // bit size
             if let Some(bits) = bits {
                 if bits == 0 {
                     return Err(syn::Error::new(span, "bits cannot bit 0"));
@@ -687,6 +703,7 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
                 }
                 ret.bits = bits;
             }
+            // padding
             if ignore && (into.is_some() || from.is_some()) {
                 return Err(syn::Error::new(
                     default.span(),
@@ -694,6 +711,7 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
                 ));
             }
 
+            // conversion
             if let Some(into) = into {
                 ret.into = quote!(#into(this));
             }
@@ -726,9 +744,11 @@ fn parse_field(attrs: &[syn::Attribute], ty: &syn::Type, ignore: bool) -> syn::R
         if ret.into.is_empty() {
             // Bounds check and remove leading ones from negative values
             ret.into = quote! {{
-                #[allow(unused_comparisons)]
-                debug_assert!(if this >= 0 { this & !#mask == 0 } else { !this & !#mask == 0 }, "value out of bounds");
-                (this & #mask) as _
+                debug_assert!({
+                    let m = #ty::MIN >> (#ty::BITS - #bits);
+                    m <= this && this <= -(m + 1)
+                });
+                (this as #base_ty & #mask)
             }};
         }
         if ret.from.is_empty() {
@@ -857,7 +877,7 @@ impl Parse for Params {
 
 /// Returns the number of bits for a given type
 fn type_bits(ty: &syn::Type) -> (TypeClass, usize) {
-    let syn::Type::Path(syn::TypePath{ path, .. }) = ty else {
+    let syn::Type::Path(syn::TypePath { path, .. }) = ty else {
         return (TypeClass::Other, 0);
     };
     let Some(ident) = path.get_ident() else {
