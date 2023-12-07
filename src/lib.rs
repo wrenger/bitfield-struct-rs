@@ -410,6 +410,7 @@ struct Member {
     bits: usize,
     base_ty: syn::Type,
     default: TokenStream,
+    access: AccessMode,
     inner: Option<MemberInner>,
 }
 
@@ -449,6 +450,7 @@ impl Member {
             mut default,
             into,
             from,
+            access,
         } = parse_field(&base_ty, &attrs, &ty, ignore)?;
 
         if bits > 0 && !ignore {
@@ -485,6 +487,7 @@ impl Member {
                 bits,
                 base_ty,
                 default,
+                access,
                 inner: Some(MemberInner {
                     ident,
                     ty,
@@ -504,31 +507,39 @@ impl Member {
                 bits,
                 base_ty,
                 default,
+                access,
                 inner: None,
             })
         }
     }
 
     fn debug(&self) -> TokenStream {
-        if let Some(inner) = &self.inner {
-            let ident_str = inner.ident.to_string();
-            let ident = &inner.ident;
-            quote!(.field(#ident_str, &self.#ident()))
-        } else {
-            quote!()
+        match (&self.inner, self.access) {
+            (Some(inner), AccessMode::ReadWrite | AccessMode::ReadOnly) => {
+                let ident_str = inner.ident.to_string();
+                let ident = &inner.ident;
+                quote!(.field(#ident_str, &self.#ident()))
+            },
+            _ => {
+                quote!()
+            }
         }
     }
 
     fn default(&self) -> TokenStream {
         let default = &self.default;
-        if let Some(inner) = &self.inner {
-            let ident = &inner.ident;
-            let with_ident = format_ident!("with_{ident}");
-            quote!(this = this.#with_ident(#default);)
-        } else {
-            let offset = self.offset;
-            let base_ty = &self.base_ty;
-            quote!(this.0 |= (#default as #base_ty) << #offset;)
+
+        match (&self.inner, self.access) {
+            (Some(inner), AccessMode::ReadWrite | AccessMode::WriteOnly) => {
+                let ident = &inner.ident;
+                let with_ident = format_ident!("with_{ident}");
+                quote!(this = this.#with_ident(#default);)
+            }
+            _ => {
+                let offset = self.offset;
+                let base_ty = &self.base_ty;
+                quote!(this.0 |= (#default as #base_ty) << #offset;)
+            }
         }
     }
 }
@@ -540,6 +551,7 @@ impl ToTokens for Member {
             bits,
             base_ty,
             default: _,
+            access,
             inner:
                 Some(MemberInner {
                     ident,
@@ -572,36 +584,46 @@ impl ToTokens for Member {
         let mask = u128::MAX >> (u128::BITS - *bits as u32);
         let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
 
-        let code = quote! {
+        let mut code = quote! {
             const #bits_ident: usize = #bits;
             const #offset_ident: usize = #offset;
-
-            #doc
-            #[doc = #location]
-            #[cfg_attr(debug_assertions, track_caller)]
-            #vis const fn #with_ident(self, value: #ty) -> Self {
-                let value: #base_ty = {
-                    let this = value;
-                    #into
-                };
-                #[allow(unused_comparisons)]
-                debug_assert!(value <= #mask, "value out of bounds");
-                Self(self.0 & !(#mask << #offset) | (value & #mask) << #offset)
-            }
-            #doc
-            #[doc = #location]
-            #vis const fn #ident(&self) -> #ty {
-                let this = (self.0 >> #offset) & #mask;
-                #from
-            }
-            #doc
-            #[doc = #location]
-            #[cfg_attr(debug_assertions, track_caller)]
-            #vis fn #set_ident(&mut self, value: #ty) {
-                *self = self.#with_ident(value);
-            }
-
         };
+
+        if matches!(access, AccessMode::ReadWrite | AccessMode::ReadOnly) {
+            code.extend(quote! {
+                #doc
+                #[doc = #location]
+                #vis const fn #ident(&self) -> #ty {
+                    let this = (self.0 >> #offset) & #mask;
+                    #from
+                }
+            });
+        }
+
+        if matches!(access, AccessMode::ReadWrite | AccessMode::WriteOnly) {
+            code.extend(quote! {
+                #doc
+                #[doc = #location]
+                #[cfg_attr(debug_assertions, track_caller)]
+                #vis const fn #with_ident(self, value: #ty) -> Self {
+                    let value: #base_ty = {
+                        let this = value;
+                        #into
+                    };
+                    #[allow(unused_comparisons)]
+                    debug_assert!(value <= #mask, "value out of bounds");
+                    Self(self.0 & !(#mask << #offset) | (value & #mask) << #offset)
+                }
+
+                #doc
+                #[doc = #location]
+                #[cfg_attr(debug_assertions, track_caller)]
+                #vis fn #set_ident(&mut self, value: #ty) {
+                    *self = self.#with_ident(value);
+                }
+            });
+        }
+
         tokens.extend(code);
     }
 }
@@ -627,6 +649,8 @@ struct Field {
     default: TokenStream,
     into: TokenStream,
     from: TokenStream,
+
+    access: AccessMode,
 }
 
 /// Parses the `bits` attribute that allows specifying a custom number of bits.
@@ -641,6 +665,12 @@ fn parse_field(
         e
     }
 
+    let default_access = if ignore {
+        AccessMode::None
+    } else {
+        AccessMode::ReadWrite
+    };
+
     // Defaults for the different types
     let (class, ty_bits) = type_bits(ty);
     let mut ret = match class {
@@ -650,6 +680,7 @@ fn parse_field(
             default: quote!(false),
             into: quote!(this as _),
             from: quote!(this != 0),
+            access: default_access,
         },
         TypeClass::SInt => Field {
             bits: ty_bits,
@@ -657,6 +688,7 @@ fn parse_field(
             default: quote!(0),
             into: quote!(),
             from: quote!(),
+            access: default_access,
         },
         TypeClass::UInt => Field {
             bits: ty_bits,
@@ -664,6 +696,7 @@ fn parse_field(
             default: quote!(0),
             into: quote!(this as _),
             from: quote!(this as _),
+            access: default_access,
         },
         TypeClass::Other => Field {
             bits: ty_bits,
@@ -671,6 +704,7 @@ fn parse_field(
             default: quote!(),
             into: quote!(#ty::into_bits(this)),
             from: quote!(#ty::from_bits(this)),
+            access: default_access,
         },
     };
 
@@ -691,6 +725,7 @@ fn parse_field(
                 default,
                 into,
                 from,
+                access,
             } = syn::parse2(tokens.clone()).map_err(|e| malformed(e, attr))?;
 
             // bit size
@@ -711,6 +746,14 @@ fn parse_field(
                 ));
             }
 
+            // Ensure padding fields remain inaccesible
+            if ignore && access.is_some_and(|mode| mode != AccessMode::None) {
+                return Err(syn::Error::new(
+                    default.span(),
+                    "'access' may only be 'None' (or unset) for padding",
+                ));
+            }
+
             // conversion
             if let Some(into) = into {
                 ret.into = quote!(#into(this));
@@ -725,6 +768,11 @@ fn parse_field(
             }
             if let Some(default) = default {
                 ret.default = default.into_token_stream();
+            }
+
+            // access mode
+            if let Some(access) = access {
+                ret.access = access;
             }
         }
     }
@@ -769,6 +817,7 @@ struct BitsAttr {
     default: Option<syn::Expr>,
     into: Option<syn::Path>,
     from: Option<syn::Path>,
+    access: Option<AccessMode>,
 }
 
 impl Parse for BitsAttr {
@@ -778,6 +827,7 @@ impl Parse for BitsAttr {
             default: None,
             into: None,
             from: None,
+            access: None,
         };
         if let Ok(bits) = syn::LitInt::parse(input) {
             attr.bits = Some(bits.base10_parse()?);
@@ -798,6 +848,8 @@ impl Parse for BitsAttr {
                     attr.into = Some(input.parse()?);
                 } else if ident == "from" {
                     attr.from = Some(input.parse()?);
+                } else if ident == "access" {
+                    attr.access = Some(input.parse()?);
                 }
 
                 if input.is_empty() {
@@ -808,6 +860,35 @@ impl Parse for BitsAttr {
             }
         }
         Ok(attr)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccessMode {
+    ReadWrite,
+    ReadOnly,
+    WriteOnly,
+    None,
+}
+
+impl Parse for AccessMode {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mode = input.parse::<Ident>()?;
+
+        if mode == "RW" {
+            Ok(AccessMode::ReadWrite)
+        } else if mode == "RO" {
+            Ok(AccessMode::ReadOnly)
+        } else if mode == "WO" {
+            Ok(AccessMode::WriteOnly)
+        } else if mode == "None" {
+            Ok(AccessMode::None)
+        } else {
+            Err(syn::Error::new(
+                mode.span(),
+                "Invalid access mode, only RW/RO/WO/None are allowed",
+            ))
+        }
     }
 }
 
