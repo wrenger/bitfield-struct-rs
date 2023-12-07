@@ -986,7 +986,7 @@ fn type_bits(ty: &syn::Type) -> (TypeClass, usize) {
 mod test {
     use quote::quote;
 
-    use crate::{BitsAttr, Order, Params};
+    use crate::{AccessMode, BitsAttr, Order, Params};
 
     #[test]
     fn parse_args() {
@@ -1011,26 +1011,67 @@ mod test {
         assert!(attr.default.is_none());
         assert!(attr.into.is_none());
         assert!(attr.from.is_none());
+        assert!(attr.access.is_none());
 
-        let args = quote!(8, default = 8);
+        let args = quote!(8, default = 8, access = RW);
         let attr = syn::parse2::<BitsAttr>(args).unwrap();
         assert_eq!(attr.bits, Some(8));
         assert!(attr.default.is_some());
         assert!(attr.into.is_none());
         assert!(attr.from.is_none());
+        assert_eq!(attr.access, Some(AccessMode::ReadWrite));
 
-        let args = quote!(default = 8);
+        let args = quote!(access = RO);
+        let attr = syn::parse2::<BitsAttr>(args).unwrap();
+        assert_eq!(attr.bits, None);
+        assert!(attr.default.is_none());
+        assert!(attr.into.is_none());
+        assert!(attr.from.is_none());
+        assert_eq!(attr.access, Some(AccessMode::ReadOnly));
+
+        let args = quote!(default = 8, access = WO);
         let attr = syn::parse2::<BitsAttr>(args).unwrap();
         assert_eq!(attr.bits, None);
         assert!(attr.default.is_some());
         assert!(attr.into.is_none());
         assert!(attr.from.is_none());
+        assert_eq!(attr.access, Some(AccessMode::WriteOnly));
 
-        let args = quote!(3, into = into_something, default = 1, from = from_something);
+        let args = quote!(
+            3,
+            into = into_something,
+            default = 1,
+            from = from_something,
+            access = None
+        );
         let attr = syn::parse2::<BitsAttr>(args).unwrap();
         assert_eq!(attr.bits, Some(3));
         assert!(attr.default.is_some());
         assert!(attr.into.is_some());
         assert!(attr.from.is_some());
+        assert_eq!(attr.access, Some(AccessMode::None));
+    }
+
+    #[test]
+    fn parse_access_mode() {
+        let args = quote!(RW);
+        let mode = syn::parse2::<AccessMode>(args).unwrap();
+        assert_eq!(mode, AccessMode::ReadWrite);
+
+        let args = quote!(RO);
+        let mode = syn::parse2::<AccessMode>(args).unwrap();
+        assert_eq!(mode, AccessMode::ReadOnly);
+
+        let args = quote!(WO);
+        let mode = syn::parse2::<AccessMode>(args).unwrap();
+        assert_eq!(mode, AccessMode::WriteOnly);
+
+        let args = quote!(None);
+        let mode = syn::parse2::<AccessMode>(args).unwrap();
+        assert_eq!(mode, AccessMode::None);
+
+        let args = quote!(garbage);
+        let mode = syn::parse2::<AccessMode>(args);
+        assert!(mode.is_err());
     }
 }
