@@ -95,8 +95,17 @@
 //!     #[bits(16)]
 //!     custom: CustomEnum,
 //!     /// public field -> public accessor functions
-//!     #[bits(12)]
+//!     #[bits(9)]
 //!     pub public: usize,
+//!     /// Can specify the access mode for fields, Read Write being the default
+//!     #[bits(1, access = RW)]
+//!     read_write: bool,
+//!     /// Can also specify read only fields...
+//!     #[bits(1, access = RO)]
+//!     read_only: bool,
+//!     /// ...and write only fields
+//!     #[bits(1, access = WO)]
+//!     write_only: bool,
 //!     /// padding
 //!     #[bits(5)]
 //!     __: u8,
@@ -130,7 +139,11 @@
 //!     .with_tiny(1)
 //!     .with_negative(-3)
 //!     .with_custom(CustomEnum::B)
-//!     .with_public(2);
+//!     .with_public(2)
+//!     .with_read_write(true)
+//!     // Would not compile
+//!     // .with_read_only(true)
+//!     .with_write_only(false);
 //!
 //! println!("{val:?}");
 //! let raw: u64 = val.into();
@@ -142,6 +155,8 @@
 //! assert_eq!(val.tiny(), 1);
 //! assert_eq!(val.custom(), CustomEnum::B);
 //! assert_eq!(val.public(), 2);
+//! assert_eq!(val.read_write(), true);
+//! assert_eq!(val.read_only(), false);
 //!
 //! // const members
 //! assert_eq!(MyBitfield::FLAG_BITS, 1);
@@ -519,7 +534,7 @@ impl Member {
                 let ident_str = inner.ident.to_string();
                 let ident = &inner.ident;
                 quote!(.field(#ident_str, &self.#ident()))
-            },
+            }
             _ => {
                 quote!()
             }
