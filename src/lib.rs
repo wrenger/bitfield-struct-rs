@@ -1,6 +1,5 @@
 // Generate docs from readme
 #![doc = include_str!("../README.md")]
-
 #![warn(clippy::unwrap_used)]
 
 use proc_macro as pc;
@@ -29,8 +28,8 @@ use syn::Token;
 /// - the number of bits
 /// - `access` to specify the access mode (RW, RO, WO, None)
 /// - `default` to set a default value
-/// - `into` to specify a conversion from the underlying type to the field type
-/// - `from` to specify a conversion from the field type to the underlying type
+/// - `into` to specify a conversion function from the field type to the bitfield type
+/// - `from` to specify a conversion function from the bitfield type to the field type
 #[proc_macro_attribute]
 pub fn bitfield(args: pc::TokenStream, input: pc::TokenStream) -> pc::TokenStream {
     match bitfield_inner(args.into(), input.into()) {
@@ -51,7 +50,6 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
     let span = input.fields.span();
     let name = input.ident;
-    let name_str = name.to_string();
     let vis = input.vis;
     let attrs: TokenStream = input.attrs.iter().map(ToTokens::to_token_stream).collect();
 
@@ -91,7 +89,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         quote! {
             impl core::fmt::Debug for #name {
                 fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                    f.debug_struct(#name_str)
+                    f.debug_struct(stringify!(#name))
                         #( #debug_fields )*
                         .finish()
                 }
@@ -484,36 +482,39 @@ fn parse_field(
                 }
                 ret.bits = bits;
             }
-            // padding
-            if ignore && (into.is_some() || from.is_some()) {
-                return Err(syn::Error::new(
-                    default.span(),
-                    "'into' and 'from' are not supported on padding",
-                ));
-            }
 
-            // Ensure padding fields remain inaccesible
-            if ignore && access.is_some_and(|mode| mode != Access::None) {
-                return Err(syn::Error::new(
-                    default.span(),
-                    "'access' may only be 'None' (or unset) for padding",
-                ));
+            // read/write access
+            if let Some(access) = access {
+                if ignore {
+                    return Err(syn::Error::new(
+                        tokens.span(),
+                        "'access' is not supported for padding",
+                    ));
+                }
+                ret.access = access;
             }
 
             // conversion
             if let Some(into) = into {
+                if ret.access == Access::None {
+                    return Err(syn::Error::new(
+                        into.span(),
+                        "'into' and 'from' are not supported on padding",
+                    ));
+                }
                 ret.into = quote!(#into(this));
             }
             if let Some(from) = from {
+                if ret.access == Access::None {
+                    return Err(syn::Error::new(
+                        from.span(),
+                        "'into' and 'from' are not supported on padding",
+                    ));
+                }
                 ret.from = quote!(#from(this));
             }
             if let Some(default) = default {
                 ret.default = default.into_token_stream();
-            }
-
-            // read/write access
-            if let Some(access) = access {
-                ret.access = access;
             }
         }
     }
@@ -521,12 +522,12 @@ fn parse_field(
     if ret.bits == 0 {
         return Err(syn::Error::new(
             ty.span(),
-            "Custom types and isize/usize require the size in the #[bits] attribute",
+            "Custom types and isize/usize require an explicit bit size",
         ));
     }
 
     // Signed integers need some special handling...
-    if !ignore && class == TypeClass::SInt {
+    if !ignore && ret.access != Access::None && class == TypeClass::SInt {
         let bits = ret.bits as u32;
         let mask = u128::MAX >> (u128::BITS - ret.bits as u32);
         let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
@@ -627,7 +628,7 @@ impl Parse for Access {
         } else {
             Err(syn::Error::new(
                 mode.span(),
-                "Invalid access mode, only RW/RO/WO/None are allowed",
+                "Invalid access mode, only RW, RO, WO, or None are allowed",
             ))
         }
     }
