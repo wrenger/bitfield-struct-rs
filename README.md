@@ -50,6 +50,8 @@ Suppose we want to store multiple data inside a single Byte, as shown below:
 This crate generates a nice wrapper type that makes it easy to do this:
 
 ```rust
+use bitfield_struct::bitfield;
+
 /// Define your type like this with the bitfield attribute
 #[bitfield(u8)]
 struct MyByte {
@@ -82,40 +84,36 @@ Additionally, this crate has a few useful features, which are shown here in more
 The example below shows how attributes are carried over and how signed integers, padding, and custom types are handled.
 
 ```rust
+use bitfield_struct::bitfield;
+
 /// A test bitfield with documentation
 #[bitfield(u64)]
 #[derive(PartialEq, Eq)] // <- Attributes after `bitfield` are carried over
 struct MyBitfield {
-    /// defaults to 16 bits for u16
+    /// Defaults to 16 bits for u16
     int: u16,
-    /// interpreted as 1 bit flag, with a custom default value
+    /// Interpreted as 1 bit flag, with a custom default value
     #[bits(default = true)]
     flag: bool,
-    /// custom bit size
+    /// Custom bit size
     #[bits(1)]
     tiny: u8,
-    /// sign extend for signed integers
+    /// Sign extend for signed integers
     #[bits(13)]
     negative: i16,
-    /// supports any type, with `into_bits`/`from_bits` (const) functions,
-    /// if not configured otherwise with the `into`/`from` parameters of the bits attribute.
-    ///
-    /// the field is initialized with 0 (passed into `from_bits`) if not specified otherwise
+    /// Supports any type with `into_bits`/`from_bits` functions
     #[bits(16)]
     custom: CustomEnum,
-    /// public field -> public accessor functions
-    #[bits(9)]
+    /// Public field -> public accessor functions
+    #[bits(10)]
     pub public: usize,
-    /// Can specify the access mode for fields, Read Write being the default
-    #[bits(1, access = RW)]
-    read_write: bool,
-    /// Can also specify read only fields...
+    /// Also supports read-only fields
     #[bits(1, access = RO)]
     read_only: bool,
-    /// ...and write only fields
+    /// And write-only fields
     #[bits(1, access = WO)]
     write_only: bool,
-    /// padding
+    /// Padding
     #[bits(5)]
     __: u8,
 }
@@ -149,9 +147,7 @@ let mut val = MyBitfield::new()
     .with_negative(-3)
     .with_custom(CustomEnum::B)
     .with_public(2)
-    .with_read_write(true)
-    // Would not compile
-    // .with_read_only(true)
+    // .with_read_only(true) <- Would not compile
     .with_write_only(false);
 
 println!("{val:?}");
@@ -164,7 +160,6 @@ assert_eq!(val.negative(), -3);
 assert_eq!(val.tiny(), 1);
 assert_eq!(val.custom(), CustomEnum::B);
 assert_eq!(val.public(), 2);
-assert_eq!(val.read_write(), true);
 assert_eq!(val.read_only(), false);
 
 // const members
@@ -181,6 +176,8 @@ Each accessor also inherits the documentation of its field.
 The signatures for `int` are:
 
 ```rust
+use std::fmt::{Debug, Formatter, Result};
+
 // generated struct
 struct MyBitfield(u64);
 impl MyBitfield {
@@ -189,19 +186,60 @@ impl MyBitfield {
     const INT_BITS: usize = 16;
     const INT_OFFSET: usize = 0;
 
-    const fn with_int(self, value: u16) -> Self { /* ... */ }
-    const fn int(&self) -> u16 { /* ... */ }
-    fn set_int(&mut self, value: u16) { /* ... */ }
+    const fn with_int(self, value: u16) -> Self { todo!() }
+    const fn int(&self) -> u16 { todo!() }
+    fn set_int(&mut self, value: u16) { todo!() }
 
     // other field ...
 }
-// generated trait implementations
-impl From<u64> for MyBitfield { /* ... */ }
-impl From<MyBitfield> for u64 { /* ... */ }
-impl Debug for MyBitfield { /* ... */ }
+// Also generates From<u64>, Into<u64>, Default, and Debug implementations...
 ```
 
 > Hint: You can use the rust-analyzer "Expand macro recursively" action to view the generated code.
+
+## Custom Types
+
+The macro supports any types that are convertible into the underlying bitfield type.
+This can be enums like in the following example or any other struct.
+
+The conversion and default values can be specified with the following `#[bits]` parameters:
+- `from`: Function converting from raw bits into the custom type, defaults to `<ty>::from_bits`
+- `into`: Function converting from the custom type into raw bits, defaults to `<ty>::into_bits`
+- `default`: Custom expression, defaults to calling `<ty>::from_bits(0)`
+
+
+```rust
+use bitfield_struct::bitfield;
+
+#[bitfield(u16)]
+#[derive(PartialEq, Eq)]
+struct Bits {
+    /// Supports any convertible type
+    #[bits(16, default = CustomEnum::B, from = CustomEnum::my_from_bits)]
+    custom: CustomEnum,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[repr(u16)]
+enum CustomEnum {
+    A = 0,
+    B = 1,
+    C = 2,
+}
+impl CustomEnum {
+    // This has to be a const fn
+    const fn into_bits(self) -> u16 {
+        self as _
+    }
+    const fn my_from_bits(value: u16) -> Self {
+        match value {
+            0 => Self::A,
+            1 => Self::B,
+            _ => Self::C,
+        }
+    }
+}
+```
 
 ## Bit Order
 
@@ -209,7 +247,8 @@ The optional `order` macro argument determines the layout of the bits, with the 
 Lsb (least significant bit) first:
 
 ```rust
-# use bitfield_struct::bitfield;
+use bitfield_struct::bitfield;
+
 #[bitfield(u8, order = Lsb)]
 struct MyLsbByte {
     /// The first field occupies the least significant bits
@@ -237,7 +276,8 @@ assert!(my_byte_lsb.0 == 0b1_10_0_1010);
 The macro generates the reverse order when Msb (most significant bit) is specified:
 
 ```rust
-# use bitfield_struct::bitfield;
+use bitfield_struct::bitfield;
+
 #[bitfield(u8, order = Msb)]
 struct MyMsbByte {
     /// The first field occupies the most significant bits
@@ -267,19 +307,22 @@ assert!(my_byte_msb.0 == 0b1010_0_10_1);
 This macro automatically creates a suitable `fmt::Debug` and `Default` implementations similar to the ones created for normal structs by `#[derive(Debug, Default)]`.
 You can disable this with the extra `debug` and `default` arguments.
 
-```rs
+```rust
+use std::fmt::{Debug, Formatter, Result};
+use bitfield_struct::bitfield;
+
 #[bitfield(u64, debug = false, default = false)]
 struct CustomDebug {
     data: u64
 }
-impl fmt::Debug for CustomDebug {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Debug for CustomDebug {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "0x{:x}", self.data())
     }
 }
 impl Default for CustomDebug {
     fn default() -> Self {
-        Self(123) // note: you can also use `#[bits(64, default = 123)]`
+        Self(123)
     }
 }
 

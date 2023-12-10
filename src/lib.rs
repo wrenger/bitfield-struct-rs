@@ -1,288 +1,5 @@
-//! # Bitfield Struct
-//!
-//! Procedural macro for bitfields that allows specifying bitfields as structs.
-//! As this library provides a procedural macro, it has no runtime dependencies
-//! and works for `no-std` environments.
-//!
-//! - Supports bool flags, raw integers, and every custom type convertible into integers (structs/enums)
-//! - Ideal for driver/OS/embedded development (defining HW registers/structures)
-//! - Generates minimalistic, pure, safe rust functions
-//! - Compile-time checks for type and field sizes
-//! - Rust-analyzer friendly (carries over documentation to accessor functions)
-//! - Exports field offsets and sizes as constants (useful for const asserts)
-//! - Generation of `fmt::Debug` and `Default`
-//!
-//! ## Basics
-//!
-//! Let's begin with a simple example.<br>
-//! Suppose we want to store multiple data inside a single Byte, as shown below:
-//!
-//! <table>
-//!   <tr>
-//!     <td>7</td>
-//!     <td>6</td>
-//!     <td>5</td>
-//!     <td>4</td>
-//!     <td>3</td>
-//!     <td>3</td>
-//!     <td>1</td>
-//!     <td>0</td>
-//!   </tr>
-//!   <tr>
-//!     <td>P</td>
-//!     <td colspan="2">Level</td>
-//!     <td>S</td>
-//!     <td colspan="4">Kind</td>
-//!   </tr>
-//! </table>
-//!
-//! This crate is able to generate a nice wrapper type that makes it easy to do this:
-//!
-//! ```
-//! # use bitfield_struct::bitfield;
-//! /// Define your type like this with the bitfield attribute
-//! #[bitfield(u8)]
-//! struct MyByte {
-//!     /// The first field occupies the least significant bits
-//!     #[bits(4)]
-//!     kind: usize,
-//!     /// Booleans are 1 bit large
-//!     system: bool,
-//!     /// The bits attribute specifies the bit size of this field
-//!     #[bits(2)]
-//!     level: usize,
-//!     /// The last field spans over the most significant bits
-//!     present: bool
-//! }
-//! // The macro creates three accessor functions for each field:
-//! // <name>, with_<name> and set_<name>
-//! let my_byte = MyByte::new()
-//!     .with_kind(15)
-//!     .with_system(false)
-//!     .with_level(3)
-//!     .with_present(true);
-//!
-//! assert!(my_byte.present());
-//! ```
-//!
-//! ## Features
-//!
-//! Additionally, this crate has a few useful features, which are shown here in more detail.
-//!
-//! The example below shows how attributes are carried over and how signed integers, padding, and custom types are handled.
-//!
-//! ```
-//! # use bitfield_struct::bitfield;
-//! /// A test bitfield with documentation
-//! #[bitfield(u64)]
-//! #[derive(PartialEq, Eq)] // <- Attributes after `bitfield` are carried over
-//! struct MyBitfield {
-//!     /// defaults to 16 bits for u16
-//!     int: u16,
-//!     /// interpreted as 1 bit flag, with a custom default value
-//!     #[bits(default = true)]
-//!     flag: bool,
-//!     /// custom bit size
-//!     #[bits(1)]
-//!     tiny: u8,
-//!     /// sign extend for signed integers
-//!     #[bits(13)]
-//!     negative: i16,
-//!     /// supports any type, with `into_bits`/`from_bits` (const) functions,
-//!     /// if not configured otherwise with the `into`/`from` parameters of the bits attribute.
-//!     ///
-//!     /// the field is initialized with 0 (passed into `from_bits`) if not specified otherwise
-//!     #[bits(16)]
-//!     custom: CustomEnum,
-//!     /// public field -> public accessor functions
-//!     #[bits(9)]
-//!     pub public: usize,
-//!     /// Can specify the access mode for fields, Read Write being the default
-//!     #[bits(1, access = RW)]
-//!     read_write: bool,
-//!     /// Can also specify read only fields...
-//!     #[bits(1, access = RO)]
-//!     read_only: bool,
-//!     /// ...and write only fields
-//!     #[bits(1, access = WO)]
-//!     write_only: bool,
-//!     /// padding
-//!     #[bits(5)]
-//!     __: u8,
-//! }
-//!
-//! /// A custom enum
-//! #[derive(Debug, PartialEq, Eq)]
-//! #[repr(u64)]
-//! enum CustomEnum {
-//!     A = 0,
-//!     B = 1,
-//!     C = 2,
-//! }
-//! impl CustomEnum {
-//!     // This has to be a const fn
-//!     const fn into_bits(self) -> u64 {
-//!         self as _
-//!     }
-//!     const fn from_bits(value: u64) -> Self {
-//!         match value {
-//!             0 => Self::A,
-//!             1 => Self::B,
-//!             _ => Self::C,
-//!         }
-//!     }
-//! }
-//!
-//! // Usage:
-//! let mut val = MyBitfield::new()
-//!     .with_int(3 << 15)
-//!     .with_tiny(1)
-//!     .with_negative(-3)
-//!     .with_custom(CustomEnum::B)
-//!     .with_public(2)
-//!     .with_read_write(true)
-//!     // Would not compile
-//!     // .with_read_only(true)
-//!     .with_write_only(false);
-//!
-//! println!("{val:?}");
-//! let raw: u64 = val.into();
-//! println!("{raw:b}");
-//!
-//! assert_eq!(val.int(), 3 << 15);
-//! assert_eq!(val.flag(), true);
-//! assert_eq!(val.negative(), -3);
-//! assert_eq!(val.tiny(), 1);
-//! assert_eq!(val.custom(), CustomEnum::B);
-//! assert_eq!(val.public(), 2);
-//! assert_eq!(val.read_write(), true);
-//! assert_eq!(val.read_only(), false);
-//!
-//! // const members
-//! assert_eq!(MyBitfield::FLAG_BITS, 1);
-//! assert_eq!(MyBitfield::FLAG_OFFSET, 16);
-//!
-//! val.set_negative(1);
-//! assert_eq!(val.negative(), 1);
-//! ```
-//!
-//! The macro generates three accessor functions for each field.
-//! Each accessor also inherits the documentation of its field.
-//!
-//! The signatures for `int` are:
-//!
-//! ```ignore
-//! // generated struct
-//! struct MyBitfield(u64);
-//! impl MyBitfield {
-//!     const fn new() -> Self { Self(0) }
-//!
-//!     const INT_BITS: usize = 16;
-//!     const INT_OFFSET: usize = 0;
-//!
-//!     const fn with_int(self, value: u16) -> Self { /* ... */ }
-//!     const fn int(&self) -> u16 { /* ... */ }
-//!     fn set_int(&mut self, value: u16) { /* ... */ }
-//!
-//!     // other field ...
-//! }
-//! // generated trait implementations
-//! impl From<u64> for MyBitfield { /* ... */ }
-//! impl From<MyBitfield> for u64 { /* ... */ }
-//! impl Debug for MyBitfield { /* ... */ }
-//! ```
-//!
-//! > Hint: You can use the rust-analyzer "Expand macro recursively" action to view the generated code.
-//!
-//! ## Bit Order
-//!
-//! The optional `order` macro argument determines the layout of the bits, with the default being
-//! Lsb (least significant bit) first:
-//!
-//! ```
-//! # use bitfield_struct::bitfield;
-//! #[bitfield(u8, order = Lsb)]
-//! struct MyLsbByte {
-//!     /// The first field occupies the least significant bits
-//!     #[bits(4)]
-//!     kind: usize,
-//!     system: bool,
-//!     #[bits(2)]
-//!     level: usize,
-//!     present: bool
-//! }
-//!
-//! let my_byte_lsb = MyLsbByte::new()
-//!     .with_kind(10)
-//!     .with_system(false)
-//!     .with_level(2)
-//!     .with_present(true);
-//!
-//! //                         .- present
-//! //                         | .- level
-//! //                         | |  .- system
-//! //                         | |  | .- kind
-//! assert!(my_byte_lsb.0 == 0b1_10_0_1010);
-//! ```
-//!
-//! The macro generates the reverse order when Msb (most significant bit) is specified:
-//!
-//! ```
-//! # use bitfield_struct::bitfield;
-//! #[bitfield(u8, order = Msb)]
-//! struct MyMsbByte {
-//!     /// The first field occupies the most significant bits
-//!     #[bits(4)]
-//!     kind: usize,
-//!     system: bool,
-//!     #[bits(2)]
-//!     level: usize,
-//!     present: bool
-//! }
-//!
-//! let my_byte_msb = MyMsbByte::new()
-//!     .with_kind(10)
-//!     .with_system(false)
-//!     .with_level(2)
-//!     .with_present(true);
-//!
-//! //                         .- kind
-//! //                         |    .- system
-//! //                         |    | .- level
-//! //                         |    | |  .- present
-//! assert!(my_byte_msb.0 == 0b1010_0_10_1);
-//! ```
-//!
-//! ## `fmt::Debug` and `Default`
-//!
-//! This macro automatically creates a suitable `fmt::Debug` and `Default` implementations
-//! similar to the ones created for normal structs by `#[derive(Debug, Default)]`.
-//! You can disable these with the extra `debug` and `default` arguments.
-//!
-//! ```
-//! # use std::fmt;
-//! # use bitfield_struct::bitfield;
-//! #[bitfield(u64, debug = false, default = false)]
-//! struct CustomDebug {
-//!     data: u64
-//! }
-//!
-//! impl fmt::Debug for CustomDebug {
-//!     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//!         write!(f, "0x{:x}", self.data())
-//!     }
-//! }
-//!
-//! impl Default for CustomDebug {
-//!     fn default() -> Self {
-//!         Self(123) // note: you can also use `#[bits(64, default = 123)]`
-//!     }
-//! }
-//!
-//! let val = CustomDebug::default();
-//! println!("{val:?}")
-//! ```
-//!
+// Generate docs from readme
+#![doc = include_str!("../README.md")]
 
 #![warn(clippy::unwrap_used)]
 
@@ -301,6 +18,19 @@ use syn::Token;
 ///
 /// It can contain an extra `debug` argument for disabling the `Debug` trait
 /// generation (`#[bitfield(u64, debug = false)]`).
+///
+/// Parameters of the `bitfield` attribute:
+/// - the bitfield type
+/// - `debug` to disable the `Debug` trait generation
+/// - `default` to disable the `Default` trait generation
+/// - `order` to specify the bit order (Lsb, Msb)
+///
+/// Parameters of the `bits` attribute (for fields):
+/// - the number of bits
+/// - `access` to specify the access mode (RW, RO, WO, None)
+/// - `default` to set a default value
+/// - `into` to specify a conversion from the underlying type to the field type
+/// - `from` to specify a conversion from the field type to the underlying type
 #[proc_macro_attribute]
 pub fn bitfield(args: pc::TokenStream, input: pc::TokenStream) -> pc::TokenStream {
     match bitfield_inner(args.into(), input.into()) {
@@ -425,7 +155,6 @@ struct Member {
     bits: usize,
     base_ty: syn::Type,
     default: TokenStream,
-    access: AccessMode,
     inner: Option<MemberInner>,
 }
 
@@ -468,12 +197,23 @@ impl Member {
             access,
         } = parse_field(&base_ty, &attrs, &ty, ignore)?;
 
+        let ignore = ignore || access == Access::None;
+
         if bits > 0 && !ignore {
+            // overflow check
             if offset + bits > base_bits {
                 return Err(syn::Error::new(
                     ty.span(),
                     "The total size of the members is too large!",
                 ));
+            };
+
+            // clear conversion expr if not needed
+            let (from, into) = match access {
+                Access::ReadWrite => (from, into),
+                Access::ReadOnly => (from, quote!()),
+                Access::WriteOnly => (quote!(), into),
+                Access::None => (quote!(), quote!()),
             };
 
             // compute the offset
@@ -483,15 +223,13 @@ impl Member {
                 base_bits - offset - bits
             };
 
-            if into.is_empty() || from.is_empty() {
-                return Err(syn::Error::new(
-                    ty.span(),
-                    "Custom types require 'into', and 'from' in the #[bits] attribute",
-                ));
-            }
-
+            // auto-conversion from zero
             if default.is_empty() {
-                default = quote!(#ty::from_bits(0));
+                if !from.is_empty() {
+                    default = quote!({ let this = 0; #from });
+                } else {
+                    default = quote!(0);
+                }
             }
 
             // remove our attribute
@@ -502,7 +240,6 @@ impl Member {
                 bits,
                 base_ty,
                 default,
-                access,
                 inner: Some(MemberInner {
                     ident,
                     ty,
@@ -522,40 +259,35 @@ impl Member {
                 bits,
                 base_ty,
                 default,
-                access,
                 inner: None,
             })
         }
     }
 
     fn debug(&self) -> TokenStream {
-        match (&self.inner, self.access) {
-            (Some(inner), AccessMode::ReadWrite | AccessMode::ReadOnly) => {
+        if let Some(inner) = &self.inner {
+            if !inner.from.is_empty() {
                 let ident_str = inner.ident.to_string();
                 let ident = &inner.ident;
-                quote!(.field(#ident_str, &self.#ident()))
-            }
-            _ => {
-                quote!()
+                return quote!(.field(#ident_str, &self.#ident()));
             }
         }
+        quote!()
     }
 
     fn default(&self) -> TokenStream {
         let default = &self.default;
 
-        match (&self.inner, self.access) {
-            (Some(inner), AccessMode::ReadWrite | AccessMode::WriteOnly) => {
+        if let Some(inner) = &self.inner {
+            if !inner.into.is_empty() {
                 let ident = &inner.ident;
                 let with_ident = format_ident!("with_{ident}");
-                quote!(this = this.#with_ident(#default);)
-            }
-            _ => {
-                let offset = self.offset;
-                let base_ty = &self.base_ty;
-                quote!(this.0 |= (#default as #base_ty) << #offset;)
+                return quote!(this = this.#with_ident(#default););
             }
         }
+        let offset = self.offset;
+        let base_ty = &self.base_ty;
+        quote!(this.0 |= (#default as #base_ty) << #offset;)
     }
 }
 
@@ -566,7 +298,6 @@ impl ToTokens for Member {
             bits,
             base_ty,
             default: _,
-            access,
             inner:
                 Some(MemberInner {
                     ident,
@@ -604,7 +335,7 @@ impl ToTokens for Member {
             const #offset_ident: usize = #offset;
         };
 
-        if matches!(access, AccessMode::ReadWrite | AccessMode::ReadOnly) {
+        if !from.is_empty() {
             code.extend(quote! {
                 #doc
                 #[doc = #location]
@@ -615,7 +346,7 @@ impl ToTokens for Member {
             });
         }
 
-        if matches!(access, AccessMode::ReadWrite | AccessMode::WriteOnly) {
+        if !into.is_empty() {
             code.extend(quote! {
                 #doc
                 #[doc = #location]
@@ -665,7 +396,7 @@ struct Field {
     into: TokenStream,
     from: TokenStream,
 
-    access: AccessMode,
+    access: Access,
 }
 
 /// Parses the `bits` attribute that allows specifying a custom number of bits.
@@ -680,10 +411,10 @@ fn parse_field(
         e
     }
 
-    let default_access = if ignore {
-        AccessMode::None
+    let access = if ignore {
+        Access::None
     } else {
-        AccessMode::ReadWrite
+        Access::ReadWrite
     };
 
     // Defaults for the different types
@@ -695,7 +426,7 @@ fn parse_field(
             default: quote!(false),
             into: quote!(this as _),
             from: quote!(this != 0),
-            access: default_access,
+            access,
         },
         TypeClass::SInt => Field {
             bits: ty_bits,
@@ -703,7 +434,7 @@ fn parse_field(
             default: quote!(0),
             into: quote!(),
             from: quote!(),
-            access: default_access,
+            access,
         },
         TypeClass::UInt => Field {
             bits: ty_bits,
@@ -711,7 +442,7 @@ fn parse_field(
             default: quote!(0),
             into: quote!(this as _),
             from: quote!(this as _),
-            access: default_access,
+            access,
         },
         TypeClass::Other => Field {
             bits: ty_bits,
@@ -719,7 +450,7 @@ fn parse_field(
             default: quote!(),
             into: quote!(#ty::into_bits(this)),
             from: quote!(#ty::from_bits(this)),
-            access: default_access,
+            access,
         },
     };
 
@@ -762,7 +493,7 @@ fn parse_field(
             }
 
             // Ensure padding fields remain inaccesible
-            if ignore && access.is_some_and(|mode| mode != AccessMode::None) {
+            if ignore && access.is_some_and(|mode| mode != Access::None) {
                 return Err(syn::Error::new(
                     default.span(),
                     "'access' may only be 'None' (or unset) for padding",
@@ -774,18 +505,13 @@ fn parse_field(
                 ret.into = quote!(#into(this));
             }
             if let Some(from) = from {
-                // Auto-conversion from zero
-                if default.is_none() {
-                    ret.default = quote!(#from(0));
-                }
-
                 ret.from = quote!(#from(this));
             }
             if let Some(default) = default {
                 ret.default = default.into_token_stream();
             }
 
-            // access mode
+            // read/write access
             if let Some(access) = access {
                 ret.access = access;
             }
@@ -832,7 +558,7 @@ struct BitsAttr {
     default: Option<syn::Expr>,
     into: Option<syn::Path>,
     from: Option<syn::Path>,
-    access: Option<AccessMode>,
+    access: Option<Access>,
 }
 
 impl Parse for BitsAttr {
@@ -879,25 +605,25 @@ impl Parse for BitsAttr {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AccessMode {
+enum Access {
     ReadWrite,
     ReadOnly,
     WriteOnly,
     None,
 }
 
-impl Parse for AccessMode {
+impl Parse for Access {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mode = input.parse::<Ident>()?;
 
         if mode == "RW" {
-            Ok(AccessMode::ReadWrite)
+            Ok(Access::ReadWrite)
         } else if mode == "RO" {
-            Ok(AccessMode::ReadOnly)
+            Ok(Access::ReadOnly)
         } else if mode == "WO" {
-            Ok(AccessMode::WriteOnly)
+            Ok(Access::WriteOnly)
         } else if mode == "None" {
-            Ok(AccessMode::None)
+            Ok(Access::None)
         } else {
             Err(syn::Error::new(
                 mode.span(),
@@ -1001,7 +727,7 @@ fn type_bits(ty: &syn::Type) -> (TypeClass, usize) {
 mod test {
     use quote::quote;
 
-    use crate::{AccessMode, BitsAttr, Order, Params};
+    use crate::{Access, BitsAttr, Order, Params};
 
     #[test]
     fn parse_args() {
@@ -1034,7 +760,7 @@ mod test {
         assert!(attr.default.is_some());
         assert!(attr.into.is_none());
         assert!(attr.from.is_none());
-        assert_eq!(attr.access, Some(AccessMode::ReadWrite));
+        assert_eq!(attr.access, Some(Access::ReadWrite));
 
         let args = quote!(access = RO);
         let attr = syn::parse2::<BitsAttr>(args).unwrap();
@@ -1042,7 +768,7 @@ mod test {
         assert!(attr.default.is_none());
         assert!(attr.into.is_none());
         assert!(attr.from.is_none());
-        assert_eq!(attr.access, Some(AccessMode::ReadOnly));
+        assert_eq!(attr.access, Some(Access::ReadOnly));
 
         let args = quote!(default = 8, access = WO);
         let attr = syn::parse2::<BitsAttr>(args).unwrap();
@@ -1050,7 +776,7 @@ mod test {
         assert!(attr.default.is_some());
         assert!(attr.into.is_none());
         assert!(attr.from.is_none());
-        assert_eq!(attr.access, Some(AccessMode::WriteOnly));
+        assert_eq!(attr.access, Some(Access::WriteOnly));
 
         let args = quote!(
             3,
@@ -1064,29 +790,29 @@ mod test {
         assert!(attr.default.is_some());
         assert!(attr.into.is_some());
         assert!(attr.from.is_some());
-        assert_eq!(attr.access, Some(AccessMode::None));
+        assert_eq!(attr.access, Some(Access::None));
     }
 
     #[test]
     fn parse_access_mode() {
         let args = quote!(RW);
-        let mode = syn::parse2::<AccessMode>(args).unwrap();
-        assert_eq!(mode, AccessMode::ReadWrite);
+        let mode = syn::parse2::<Access>(args).unwrap();
+        assert_eq!(mode, Access::ReadWrite);
 
         let args = quote!(RO);
-        let mode = syn::parse2::<AccessMode>(args).unwrap();
-        assert_eq!(mode, AccessMode::ReadOnly);
+        let mode = syn::parse2::<Access>(args).unwrap();
+        assert_eq!(mode, Access::ReadOnly);
 
         let args = quote!(WO);
-        let mode = syn::parse2::<AccessMode>(args).unwrap();
-        assert_eq!(mode, AccessMode::WriteOnly);
+        let mode = syn::parse2::<Access>(args).unwrap();
+        assert_eq!(mode, Access::WriteOnly);
 
         let args = quote!(None);
-        let mode = syn::parse2::<AccessMode>(args).unwrap();
-        assert_eq!(mode, AccessMode::None);
+        let mode = syn::parse2::<Access>(args).unwrap();
+        assert_eq!(mode, Access::None);
 
         let args = quote!(garbage);
-        let mode = syn::parse2::<AccessMode>(args);
+        let mode = syn::parse2::<Access>(args);
         assert!(mode.is_err());
     }
 }

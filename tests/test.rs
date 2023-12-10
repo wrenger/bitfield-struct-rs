@@ -6,39 +6,34 @@ use bitfield_struct::bitfield;
 fn members() {
     /// A test bitfield with documentation
     #[bitfield(u64)]
+    #[derive(PartialEq, Eq)] // <- Attributes after `bitfield` are carried over
     struct MyBitfield {
-        /// defaults to 16 bits for u16
+        /// Defaults to 16 bits for u16
         int: u16,
-        /// interpreted as 1 bit flag, with a custom default value
+        /// Interpreted as 1 bit flag, with a custom default value
         #[bits(default = true)]
         flag: bool,
-        /// custom bit size
+        /// Custom bit size
         #[bits(1)]
         tiny: u8,
-        /// sign extend for signed integers
+        /// Sign extend for signed integers
         #[bits(13)]
         negative: i16,
-        /// supports any type, with `into_bits`/`from_bits` expressions (that are const eval),
-        /// if not configured otherwise with the `into`/`from` parameters of the bits attribute.
-        ///
-        /// the field is initialized with 0 (passed into `from_bits`) if not specified otherwise
+        /// Supports any type with `into_bits`/`from_bits` functions
         #[bits(16)]
         custom: CustomEnum,
-        /// public field -> public accessor functions
-        #[bits(9)]
+        /// Public field -> public accessor functions
+        #[bits(10)]
         pub public: usize,
-        /// Can specify the access mode for fields, Read Write being the default
-        #[bits(1, access = RW)]
-        read_write: bool,
-        /// Can also specify read only fields...
+        /// Also supports read-only fields
         #[bits(1, access = RO)]
         read_only: bool,
-        /// ...and write only fields
+        /// And write-only fields
         #[bits(1, access = WO)]
         write_only: bool,
-        /// padding
+        /// Padding
         #[bits(5)]
-        __: (),
+        __: u8,
     }
 
     /// A custom enum
@@ -67,7 +62,6 @@ fn members() {
         .with_tiny(1)
         .with_negative(-3)
         .with_public(2)
-        .with_read_write(true)
         // Would not compile
         // .with_read_only(true)
         .with_write_only(false);
@@ -86,7 +80,6 @@ fn members() {
     assert_eq!(val.tiny(), 1);
     assert_eq!(val.custom(), CustomEnum::B);
     assert_eq!(val.public(), 2);
-    assert_eq!(val.read_write(), true);
     assert_eq!(val.read_only(), false);
 
     // const members
@@ -241,6 +234,43 @@ fn entirely_negative() {
     assert_eq!(v.negative(), i32::MIN);
     let v = MyBitfield::new().with_negative(i32::MAX);
     assert_eq!(v.negative(), i32::MAX);
+}
+
+#[test]
+fn custom() {
+    #[bitfield(u16)]
+    #[derive(PartialEq, Eq)]
+    struct Bits {
+        /// Supports any type, with default/to/from expressions
+        /// - into/from call Bits::into_bits/Bits::from_bits if nothing else is specified
+        /// - default falls back to calling Bits::from_bits with 0
+        #[bits(13, default = CustomEnum::B, from = CustomEnum::my_from_bits)]
+        custom: CustomEnum,
+        // Padding with default
+        #[bits(3)]
+        __: (),
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    #[repr(u16)]
+    enum CustomEnum {
+        A = 0,
+        B = 1,
+        C = 2,
+    }
+    impl CustomEnum {
+        // This has to be a const fn
+        const fn into_bits(self) -> u16 {
+            self as _
+        }
+        const fn my_from_bits(value: u16) -> Self {
+            match value {
+                0 => Self::A,
+                1 => Self::B,
+                _ => Self::C,
+            }
+        }
+    }
 }
 
 #[test]
