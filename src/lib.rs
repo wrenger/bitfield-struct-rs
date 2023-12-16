@@ -69,7 +69,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         return Err(syn::Error::new(
             span,
             format!(
-                "The bitfiled size ({bits} bits) has to be equal to the sum of its members ({offset} bits)!. \
+                "The bitfield size ({bits} bits) has to be equal to the sum of its members ({offset} bits)!. \
                 You might have to add padding (a {} bits large member prefixed with \"_\").",
                 bits - offset
             ),
