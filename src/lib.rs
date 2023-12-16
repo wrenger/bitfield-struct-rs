@@ -3,7 +3,7 @@
 #![warn(clippy::unwrap_used)]
 
 use proc_macro as pc;
-use proc_macro2::{Ident, Span, TokenStream};
+use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote, ToTokens};
 use std::stringify;
 use syn::parse::{Parse, ParseStream};
@@ -96,7 +96,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             }
         }
     } else {
-        TokenStream::default()
+        TokenStream::new()
     };
 
     let defaults = members.iter().map(Member::default);
@@ -265,9 +265,8 @@ impl Member {
     fn debug(&self) -> TokenStream {
         if let Some(inner) = &self.inner {
             if !inner.from.is_empty() {
-                let ident_str = inner.ident.to_string();
                 let ident = &inner.ident;
-                return quote!(.field(#ident_str, &self.#ident()));
+                return quote!(.field(stringify!(#ident), &self.#ident()));
             }
         }
         quote!()
@@ -311,11 +310,12 @@ impl ToTokens for Member {
         };
 
         let ident_str = ident.to_string();
+        let ident_upper = ident_str.to_uppercase();
 
         let with_ident = format_ident!("with_{ident}");
         let set_ident = format_ident!("set_{ident}");
-        let bits_ident = format_ident!("{}_BITS", ident_str.to_uppercase());
-        let offset_ident = format_ident!("{}_OFFSET", ident_str.to_uppercase());
+        let bits_ident = format_ident!("{ident_upper}_BITS");
+        let offset_ident = format_ident!("{ident_upper}_OFFSET");
 
         let location = format!("\n\nBits: {offset}..{}", offset + bits);
 
@@ -325,38 +325,35 @@ impl ToTokens for Member {
             .map(ToTokens::to_token_stream)
             .collect();
 
-        let mask = u128::MAX >> (u128::BITS - *bits as u32);
-        let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
-
-        let mut code = quote! {
+        tokens.extend(quote! {
             const #bits_ident: usize = #bits;
             const #offset_ident: usize = #offset;
-        };
+        });
 
         if !from.is_empty() {
-            code.extend(quote! {
+            tokens.extend(quote! {
                 #doc
                 #[doc = #location]
                 #vis const fn #ident(&self) -> #ty {
-                    let this = (self.0 >> #offset) & #mask;
+                    let mask = #base_ty::MAX >> (#base_ty::BITS - Self::#bits_ident as u32);
+                    let this = (self.0 >> Self::#offset_ident) & mask;
                     #from
                 }
             });
         }
 
         if !into.is_empty() {
-            code.extend(quote! {
+            tokens.extend(quote! {
                 #doc
                 #[doc = #location]
                 #[cfg_attr(debug_assertions, track_caller)]
                 #vis const fn #with_ident(self, value: #ty) -> Self {
-                    let value: #base_ty = {
-                        let this = value;
-                        #into
-                    };
+                    let this = value;
+                    let value: #base_ty = #into;
+                    let mask = #base_ty::MAX >> (#base_ty::BITS - Self::#bits_ident as u32);
                     #[allow(unused_comparisons)]
-                    debug_assert!(value <= #mask, "value out of bounds");
-                    Self(self.0 & !(#mask << #offset) | (value & #mask) << #offset)
+                    debug_assert!(value <= mask, "value out of bounds");
+                    Self(self.0 & !(mask << Self::#offset_ident) | (value & mask) << Self::#offset_ident)
                 }
 
                 #doc
@@ -367,8 +364,6 @@ impl ToTokens for Member {
                 }
             });
         }
-
-        tokens.extend(code);
     }
 }
 
@@ -529,8 +524,6 @@ fn parse_field(
     // Signed integers need some special handling...
     if !ignore && ret.access != Access::None && class == TypeClass::SInt {
         let bits = ret.bits as u32;
-        let mask = u128::MAX >> (u128::BITS - ret.bits as u32);
-        let mask = syn::LitInt::new(&format!("0x{mask:x}"), Span::mixed_site());
         if ret.into.is_empty() {
             // Bounds check and remove leading ones from negative values
             ret.into = quote! {{
@@ -538,7 +531,8 @@ fn parse_field(
                     let m = #ty::MIN >> (#ty::BITS - #bits);
                     m <= this && this <= -(m + 1)
                 });
-                (this as #base_ty & #mask)
+                let mask = #base_ty::MAX >> (#base_ty::BITS - #bits);
+                (this as #base_ty & mask)
             }};
         }
         if ret.from.is_empty() {
