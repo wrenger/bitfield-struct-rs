@@ -441,8 +441,8 @@ fn parse_field(
             bits: ty_bits,
             ty: ty.clone(),
             default: quote!(),
-            into: quote!(#ty::into_bits(this)),
-            from: quote!(#ty::from_bits(this)),
+            into: quote!(<#ty>::into_bits(this)),
+            from: quote!(<#ty>::from_bits(this)),
             access,
         },
     };
