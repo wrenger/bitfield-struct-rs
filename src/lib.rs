@@ -126,6 +126,12 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
                 #( #defaults )*
                 this
             }
+            #vis const fn from_bits(bits: #ty) -> Self {
+                Self(bits)
+            }
+            #vis const fn into_bits(self) -> #ty {
+                self.0
+            }
 
             #( #members )*
         }

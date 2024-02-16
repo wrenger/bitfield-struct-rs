@@ -364,3 +364,22 @@ fn msb_order() {
 
     assert_eq!(v.0, 0xe11e_00_f0);
 }
+
+#[test]
+fn nested() {
+    #[bitfield(u8)]
+    #[derive(PartialEq)]
+    struct Child {
+        contents: u8,
+    }
+    #[bitfield(u8)]
+    #[derive(PartialEq)]
+    struct Parent {
+        #[bits(8)]
+        child: Child,
+    }
+    let child = Child::new().with_contents(0xff);
+    let parent = Parent::new().with_child(child);
+    assert_eq!(child.into_bits(), 0xff);
+    assert_eq!(parent.into_bits(), 0xff);
+}
