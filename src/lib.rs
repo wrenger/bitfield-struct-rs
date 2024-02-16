@@ -27,6 +27,7 @@ fn s_err(span: proc_macro2::Span, msg: impl fmt::Display) -> syn::Error {
 /// - `debug` to disable the `Debug` trait generation
 /// - `default` to disable the `Default` trait generation
 /// - `order` to specify the bit order (Lsb, Msb)
+/// - `conversion` to disable the generation of into_bits and from_bits
 ///
 /// Parameters of the `bits` attribute (for fields):
 /// - the number of bits
@@ -50,6 +51,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         debug,
         default,
         order,
+        conversion,
     } = syn::parse2::<Params>(args)?;
 
     let span = input.fields.span();
@@ -100,7 +102,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             }
         }
     } else {
-        TokenStream::new()
+        quote!()
     };
 
     let defaults = members.iter().map(Member::default);
@@ -114,7 +116,20 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             }
         }
     } else {
-        TokenStream::new()
+        quote!()
+    };
+
+    let conversion = if conversion {
+        quote! {
+            #vis const fn from_bits(bits: #ty) -> Self {
+                Self(bits)
+            }
+            #vis const fn into_bits(self) -> #ty {
+                self.0
+            }
+        }
+    } else {
+        quote!()
     };
 
     Ok(quote! {
@@ -130,12 +145,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
                 #( #defaults )*
                 this
             }
-            #vis const fn from_bits(bits: #ty) -> Self {
-                Self(bits)
-            }
-            #vis const fn into_bits(self) -> #ty {
-                self.0
-            }
+            #conversion
 
             #( #members )*
         }
@@ -645,6 +655,7 @@ struct Params {
     debug: bool,
     default: bool,
     order: Order,
+    conversion: bool,
 }
 
 impl Parse for Params {
@@ -660,6 +671,7 @@ impl Parse for Params {
         let mut debug = true;
         let mut default = true;
         let mut order = Order::Lsb;
+        let mut conversion = true;
 
         // try parse additional args
         while <Token![,]>::parse(input).is_ok() {
@@ -667,20 +679,20 @@ impl Parse for Params {
             <Token![=]>::parse(input)?;
             match ident.to_string().as_str() {
                 "debug" => {
-                    let value = syn::LitBool::parse(input)?.value;
-                    debug = value;
+                    debug = syn::LitBool::parse(input)?.value;
                 }
                 "default" => {
-                    let value = syn::LitBool::parse(input)?.value;
-                    default = value;
+                    default = syn::LitBool::parse(input)?.value;
                 }
                 "order" => {
-                    let value = match syn::Ident::parse(input)?.to_string().as_str() {
+                    order = match syn::Ident::parse(input)?.to_string().as_str() {
                         "Msb" | "msb" => Order::Msb,
                         "Lsb" | "lsb" => Order::Lsb,
                         _ => return Err(s_err(ident.span(), "unknown value for order")),
                     };
-                    order = value;
+                }
+                "conversion" => {
+                    conversion = syn::LitBool::parse(input)?.value;
                 }
                 _ => return Err(s_err(ident.span(), "unknown argument")),
             };
@@ -692,6 +704,7 @@ impl Parse for Params {
             debug,
             default,
             order,
+            conversion,
         })
     }
 }
