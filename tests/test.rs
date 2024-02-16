@@ -372,11 +372,12 @@ fn nested() {
     struct Child {
         contents: u8,
     }
-    #[bitfield(u8)]
+    #[bitfield(u16)]
     #[derive(PartialEq)]
     struct Parent {
         #[bits(8)]
         child: Child,
+        other: u8,
     }
     let child = Child::new().with_contents(0xff);
     let parent = Parent::new().with_child(child);
