@@ -5,10 +5,14 @@
 use proc_macro as pc;
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote, ToTokens};
-use std::stringify;
+use std::{fmt, stringify};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::Token;
+
+fn s_err(span: proc_macro2::Span, msg: impl fmt::Display) -> syn::Error {
+    syn::Error::new(span, msg)
+}
 
 /// Creates a bitfield for this struct.
 ///
@@ -54,7 +58,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let attrs: TokenStream = input.attrs.iter().map(ToTokens::to_token_stream).collect();
 
     let syn::Fields::Named(fields) = input.fields else {
-        return Err(syn::Error::new(span, "only named fields are supported"));
+        return Err(s_err(span, "only named fields are supported"));
     };
 
     let mut offset = 0;
@@ -66,7 +70,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     }
 
     if offset < bits {
-        return Err(syn::Error::new(
+        return Err(s_err(
             span,
             format!(
                 "The bitfield size ({bits} bits) has to be equal to the sum of its members ({offset} bits)!. \
@@ -76,7 +80,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         ));
     }
     if offset > bits {
-        return Err(syn::Error::new(
+        return Err(s_err(
             span,
             format!(
                 "The size of the members ({offset} bits) is larger than the type ({bits} bits)!."
@@ -183,7 +187,7 @@ impl Member {
             ..
         } = f;
 
-        let ident = ident.ok_or_else(|| syn::Error::new(span, "Not supported"))?;
+        let ident = ident.ok_or_else(|| s_err(span, "Not supported"))?;
         let ignore = ident.to_string().starts_with('_');
 
         let Field {
@@ -200,9 +204,9 @@ impl Member {
         if bits > 0 && !ignore {
             // overflow check
             if offset + bits > base_bits {
-                return Err(syn::Error::new(
+                return Err(s_err(
                     ty.span(),
-                    "The total size of the members is too large!",
+                    "The sum of the members overflows the type size",
                 ));
             };
 
@@ -400,7 +404,7 @@ fn parse_field(
     ignore: bool,
 ) -> syn::Result<Field> {
     fn malformed(mut e: syn::Error, attr: &syn::Attribute) -> syn::Error {
-        e.combine(syn::Error::new(attr.span(), "malformed #[bits] attribute"));
+        e.combine(s_err(attr.span(), "malformed #[bits] attribute"));
         e
     }
 
@@ -441,8 +445,8 @@ fn parse_field(
             bits: ty_bits,
             ty: ty.clone(),
             default: quote!(),
-            into: quote!(<#ty>::into_bits(this)),
-            from: quote!(<#ty>::from_bits(this)),
+            into: quote!(<#ty>::into_bits(this) as _),
+            from: quote!(<#ty>::from_bits(this as _)),
             access,
         },
     };
@@ -470,10 +474,10 @@ fn parse_field(
             // bit size
             if let Some(bits) = bits {
                 if bits == 0 {
-                    return Err(syn::Error::new(span, "bits cannot bit 0"));
+                    return Err(s_err(span, "bits cannot bit 0"));
                 }
                 if ty_bits != 0 && bits > ty_bits {
-                    return Err(syn::Error::new(span, "overflowing field type"));
+                    return Err(s_err(span, "overflowing field type"));
                 }
                 ret.bits = bits;
             }
@@ -481,7 +485,7 @@ fn parse_field(
             // read/write access
             if let Some(access) = access {
                 if ignore {
-                    return Err(syn::Error::new(
+                    return Err(s_err(
                         tokens.span(),
                         "'access' is not supported for padding",
                     ));
@@ -492,21 +496,15 @@ fn parse_field(
             // conversion
             if let Some(into) = into {
                 if ret.access == Access::None {
-                    return Err(syn::Error::new(
-                        into.span(),
-                        "'into' and 'from' are not supported on padding",
-                    ));
+                    return Err(s_err(into.span(), "'into' is not supported on padding"));
                 }
-                ret.into = quote!(#into(this));
+                ret.into = quote!(#into(this) as _);
             }
             if let Some(from) = from {
                 if ret.access == Access::None {
-                    return Err(syn::Error::new(
-                        from.span(),
-                        "'into' and 'from' are not supported on padding",
-                    ));
+                    return Err(s_err(from.span(), "'from' is not supported on padding"));
                 }
-                ret.from = quote!(#from(this));
+                ret.from = quote!(#from(this as _));
             }
             if let Some(default) = default {
                 ret.default = default.into_token_stream();
@@ -515,7 +513,7 @@ fn parse_field(
     }
 
     if ret.bits == 0 {
-        return Err(syn::Error::new(
+        return Err(s_err(
             ty.span(),
             "Custom types and isize/usize require an explicit bit size",
         ));
@@ -612,15 +610,15 @@ impl Parse for Access {
         let mode = input.parse::<Ident>()?;
 
         if mode == "RW" {
-            Ok(Access::ReadWrite)
+            Ok(Self::ReadWrite)
         } else if mode == "RO" {
-            Ok(Access::ReadOnly)
+            Ok(Self::ReadOnly)
         } else if mode == "WO" {
-            Ok(Access::WriteOnly)
+            Ok(Self::WriteOnly)
         } else if mode == "None" {
-            Ok(Access::None)
+            Ok(Self::None)
         } else {
-            Err(syn::Error::new(
+            Err(s_err(
                 mode.span(),
                 "Invalid access mode, only RW, RO, WO, or None are allowed",
             ))
@@ -646,11 +644,11 @@ struct Params {
 impl Parse for Params {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let Ok(ty) = syn::Type::parse(input) else {
-            return Err(syn::Error::new(input.span(), "unknown type"));
+            return Err(s_err(input.span(), "unknown type"));
         };
         let (class, bits) = type_bits(&ty);
         if class != TypeClass::UInt {
-            return Err(syn::Error::new(input.span(), "unsupported type"));
+            return Err(s_err(input.span(), "unsupported type"));
         }
 
         let mut debug = true;
@@ -674,15 +672,15 @@ impl Parse for Params {
                     let value = match syn::Ident::parse(input)?.to_string().as_str() {
                         "Msb" | "msb" => Order::Msb,
                         "Lsb" | "lsb" => Order::Lsb,
-                        _ => return Err(syn::Error::new(ident.span(), "unknown value for order")),
+                        _ => return Err(s_err(ident.span(), "unknown value for order")),
                     };
                     order = value;
                 }
-                _ => return Err(syn::Error::new(ident.span(), "unknown argument")),
+                _ => return Err(s_err(ident.span(), "unknown argument")),
             };
         }
 
-        Ok(Params {
+        Ok(Self {
             ty,
             bits,
             debug,

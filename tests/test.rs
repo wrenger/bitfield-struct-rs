@@ -292,7 +292,7 @@ fn defaults() {
 
     /// A custom enum
     #[derive(Debug, PartialEq, Eq)]
-    #[repr(u16)]
+    #[repr(u8)]
     enum CustomEnum {
         A = 0,
         B = 1,
@@ -300,10 +300,10 @@ fn defaults() {
     }
     impl CustomEnum {
         // This has to be const eval
-        const fn into_bits(self) -> u16 {
+        const fn into_bits(self) -> u8 {
             self as _
         }
-        const fn my_from_bits(value: u16) -> Self {
+        const fn my_from_bits(value: u8) -> Self {
             match value {
                 0 => Self::A,
                 1 => Self::B,
