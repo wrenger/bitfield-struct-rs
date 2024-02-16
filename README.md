@@ -20,7 +20,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-bitfield-struct = "0.5"
+bitfield-struct = "0.6"
 ```
 
 ## Basics
@@ -120,7 +120,7 @@ struct MyBitfield {
 
 /// A custom enum
 #[derive(Debug, PartialEq, Eq)]
-#[repr(u64)]
+#[repr(u16)]
 enum CustomEnum {
     A = 0,
     B = 1,
@@ -128,10 +128,10 @@ enum CustomEnum {
 }
 impl CustomEnum {
     // This has to be a const fn
-    const fn into_bits(self) -> u64 {
+    const fn into_bits(self) -> u16 {
         self as _
     }
-    const fn from_bits(value: u64) -> Self {
+    const fn from_bits(value: u16) -> Self {
         match value {
             0 => Self::A,
             1 => Self::B,
@@ -215,12 +215,15 @@ use bitfield_struct::bitfield;
 #[derive(PartialEq, Eq)]
 struct Bits {
     /// Supports any convertible type
-    #[bits(16, default = CustomEnum::B, from = CustomEnum::my_from_bits)]
+    #[bits(8, default = CustomEnum::B, from = CustomEnum::my_from_bits)]
     custom: CustomEnum,
+    /// And nested bitfields
+    #[bits(8)]
+    nested: Nested,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-#[repr(u16)]
+#[repr(u8)]
 enum CustomEnum {
     A = 0,
     B = 1,
@@ -228,16 +231,25 @@ enum CustomEnum {
 }
 impl CustomEnum {
     // This has to be a const fn
-    const fn into_bits(self) -> u16 {
+    const fn into_bits(self) -> u8 {
         self as _
     }
-    const fn my_from_bits(value: u16) -> Self {
+    const fn my_from_bits(value: u8) -> Self {
         match value {
             0 => Self::A,
             1 => Self::B,
             _ => Self::C,
         }
     }
+}
+
+/// Bitfields implement the conversion functions automatically
+#[bitfield(u8)]
+struct Nested {
+    #[bits(4)]
+    lo: u8,
+    #[bits(4)]
+    hi: u8,
 }
 ```
 
