@@ -173,6 +173,7 @@ fn negative() {
 
 #[test]
 #[should_panic]
+#[cfg(debug_assertions)]
 fn negative_pos_overflow() {
     #[bitfield(u32)]
     struct MyBitfield {
@@ -187,6 +188,7 @@ fn negative_pos_overflow() {
 
 #[test]
 #[should_panic]
+#[cfg(debug_assertions)]
 fn negative_neg_overflow() {
     #[bitfield(u32)]
     struct MyBitfield {
