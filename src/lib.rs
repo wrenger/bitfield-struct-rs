@@ -298,7 +298,7 @@ impl Member {
         if let Some(inner) = &self.inner {
             if !inner.into.is_empty() {
                 let ident = &inner.ident;
-                let with_ident = format_ident!("with_{ident}");
+                let with_ident = format_ident!("with_{}", ident);
                 return quote!(this = this.#with_ident(#default););
             }
         }
@@ -329,13 +329,16 @@ impl ToTokens for Member {
             return Default::default();
         };
 
-        let ident_str = ident.to_string();
-        let ident_upper = ident_str.to_uppercase();
+        let ident_str = ident.to_string().to_uppercase();
+        let ident_upper = Ident::new(
+            ident_str.strip_prefix("R#").unwrap_or(&ident_str),
+            ident.span(),
+        );
 
-        let with_ident = format_ident!("with_{ident}");
-        let set_ident = format_ident!("set_{ident}");
-        let bits_ident = format_ident!("{ident_upper}_BITS");
-        let offset_ident = format_ident!("{ident_upper}_OFFSET");
+        let with_ident = format_ident!("with_{}", ident);
+        let set_ident = format_ident!("set_{}", ident);
+        let bits_ident = format_ident!("{}_BITS", ident_upper);
+        let offset_ident = format_ident!("{}_OFFSET", ident_upper);
 
         let location = format!("\n\nBits: {offset}..{}", offset + bits);
 

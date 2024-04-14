@@ -386,3 +386,15 @@ fn nested() {
     assert_eq!(child.into_bits(), 0xff);
     assert_eq!(parent.into_bits(), 0xff);
 }
+
+#[test]
+fn raw() {
+    #[bitfield(u8)]
+    #[derive(PartialEq)]
+    struct Raw {
+        r#type: u8,
+    }
+    let raw = Raw::new().with_type(0xff);
+    assert_eq!(raw.r#type(), 0xff);
+    assert_eq!(raw.into_bits(), 0xff);
+}
