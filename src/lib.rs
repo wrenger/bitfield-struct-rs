@@ -121,9 +121,11 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
     let conversion = if conversion {
         quote! {
+            /// Convert from bits.
             #vis const fn from_bits(bits: #ty) -> Self {
                 Self(bits)
             }
+            /// Convert into bits.
             #vis const fn into_bits(self) -> #ty {
                 self.0
             }
