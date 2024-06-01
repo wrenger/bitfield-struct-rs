@@ -47,6 +47,9 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let input = syn::parse2::<syn::ItemStruct>(input)?;
     let Params {
         ty,
+        inner,
+        into,
+        from,
         bits,
         debug,
         default,
@@ -66,7 +69,15 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let mut offset = 0;
     let mut members = Vec::with_capacity(fields.named.len());
     for field in fields.named {
-        let f = Member::new(ty.clone(), bits, field, offset, order)?;
+        let f = Member::new(
+            ty.clone(),
+            bits,
+            into.clone(),
+            from.clone(),
+            field,
+            offset,
+            order,
+        )?;
         offset += f.bits;
         members.push(f);
     }
@@ -122,11 +133,11 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let conversion = if conversion {
         quote! {
             /// Convert from bits.
-            #vis const fn from_bits(bits: #ty) -> Self {
+            #vis const fn from_bits(bits: #inner) -> Self {
                 Self(bits)
             }
             /// Convert into bits.
-            #vis const fn into_bits(self) -> #ty {
+            #vis const fn into_bits(self) -> #inner {
                 self.0
             }
         }
@@ -138,12 +149,12 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         #attrs
         #[derive(Copy, Clone)]
         #[repr(transparent)]
-        #vis struct #name(#ty);
+        #vis struct #name(#inner);
 
         impl #name {
             /// Creates a new default initialized bitfield.
             #vis const fn new() -> Self {
-                let mut this = Self(0);
+                let mut this = Self(#from(0));
                 #( #defaults )*
                 this
             }
@@ -154,13 +165,13 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
         #default_impl
 
-        impl From<#ty> for #name {
-            fn from(v: #ty) -> Self {
+        impl From<#inner> for #name {
+            fn from(v: #inner) -> Self {
                 Self(v)
             }
         }
-        impl From<#name> for #ty {
-            fn from(v: #name) -> #ty {
+        impl From<#name> for #inner {
+            fn from(v: #name) -> #inner {
                 v.0
             }
         }
@@ -174,6 +185,8 @@ struct Member {
     offset: usize,
     bits: usize,
     base_ty: syn::Type,
+    inner_into: Option<syn::Path>,
+    inner_from: Option<syn::Path>,
     default: TokenStream,
     inner: Option<MemberInner>,
 }
@@ -191,6 +204,8 @@ impl Member {
     fn new(
         base_ty: syn::Type,
         base_bits: usize,
+        inner_into: Option<syn::Path>,
+        inner_from: Option<syn::Path>,
         f: syn::Field,
         offset: usize,
         order: Order,
@@ -259,6 +274,8 @@ impl Member {
                 offset,
                 bits,
                 base_ty,
+                inner_into,
+                inner_from,
                 default,
                 inner: Some(MemberInner {
                     ident,
@@ -278,6 +295,8 @@ impl Member {
                 offset,
                 bits,
                 base_ty,
+                inner_into,
+                inner_from,
                 default,
                 inner: None,
             })
@@ -316,6 +335,8 @@ impl ToTokens for Member {
             offset,
             bits,
             base_ty,
+            inner_into,
+            inner_from,
             default: _,
             inner:
                 Some(MemberInner {
@@ -361,7 +382,7 @@ impl ToTokens for Member {
                 #[doc = #location]
                 #vis const fn #ident(&self) -> #ty {
                     let mask = #base_ty::MAX >> (#base_ty::BITS - Self::#bits_ident as u32);
-                    let this = (self.0 >> Self::#offset_ident) & mask;
+                    let this = (#inner_into(self.0) >> Self::#offset_ident) & mask;
                     #from
                 }
             });
@@ -378,7 +399,8 @@ impl ToTokens for Member {
                     let mask = #base_ty::MAX >> (#base_ty::BITS - Self::#bits_ident as u32);
                     #[allow(unused_comparisons)]
                     debug_assert!(value <= mask, "value out of bounds");
-                    Self(self.0 & !(mask << Self::#offset_ident) | (value & mask) << Self::#offset_ident)
+                    let bits = #inner_into(self.0) & !(mask << Self::#offset_ident) | (value & mask) << Self::#offset_ident;
+                    Self(#inner_from(bits))
                 }
 
                 #doc
@@ -656,6 +678,9 @@ enum Order {
 /// The bitfield macro parameters
 struct Params {
     ty: syn::Type,
+    inner: syn::Type,
+    into: Option<syn::Path>,
+    from: Option<syn::Path>,
     bits: usize,
     debug: bool,
     default: bool,
@@ -673,6 +698,9 @@ impl Parse for Params {
             return Err(s_err(input.span(), "unsupported type"));
         }
 
+        let mut inner = ty.clone();
+        let mut from = None;
+        let mut into = None;
         let mut debug = true;
         let mut default = true;
         let mut order = Order::Lsb;
@@ -683,6 +711,15 @@ impl Parse for Params {
             let ident = Ident::parse(input)?;
             <Token![=]>::parse(input)?;
             match ident.to_string().as_str() {
+                "inner" => {
+                    inner = input.parse()?;
+                }
+                "from" => {
+                    from = Some(input.parse()?);
+                }
+                "into" => {
+                    into = Some(input.parse()?);
+                }
                 "debug" => {
                     debug = syn::LitBool::parse(input)?.value;
                 }
@@ -705,6 +742,9 @@ impl Parse for Params {
 
         Ok(Self {
             ty,
+            inner,
+            from,
+            into,
             bits,
             debug,
             default,
