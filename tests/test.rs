@@ -398,3 +398,30 @@ fn raw() {
     assert_eq!(raw.r#type(), 0xff);
     assert_eq!(raw.into_bits(), 0xff);
 }
+
+#[test]
+fn custom_inner() {
+    #[bitfield(u32, inner = CustomInner, from = CustomInner::from_inner, into = CustomInner::to_inner)]
+    #[derive(PartialEq, Eq)]
+    struct MyBitfield {
+        data: u32,
+    }
+
+    #[derive(PartialEq, Eq, Clone, Copy, Debug)]
+    #[repr(transparent)]
+    struct CustomInner(u32);
+
+    impl CustomInner {
+        const fn to_inner(self) -> u32 {
+            self.0
+        }
+
+        const fn from_inner(inner: u32) -> Self {
+            Self(inner)
+        }
+    }
+
+    let my_bitfield = MyBitfield::new();
+    assert_eq!(my_bitfield, MyBitfield::from_bits(CustomInner(0)));
+    assert_eq!(my_bitfield.into_bits(), CustomInner(0));
+}
