@@ -7,6 +7,7 @@ description = "Struct-like procedural macro for bitfields."
 keywords = ["bitfields", "bits", "proc-macro"]
 categories = ["data-structures", "no-std"]
 repository = "https://github.com/wrenger/bitfield-struct-rs.git"
+documentation = "https://docs.rs/bitfield-struct"
 readme = "README.md"
 license = "MIT"
 
