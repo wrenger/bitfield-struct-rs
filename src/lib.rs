@@ -16,14 +16,17 @@ fn s_err(span: proc_macro2::Span, msg: impl fmt::Display) -> syn::Error {
 
 /// Creates a bitfield for this struct.
 ///
-/// The arguments first, have to begin with the underlying type of the bitfield:
+/// The arguments first, have to begin with the integer type of the bitfield:
 /// For example: `#[bitfield(u64)]`.
 ///
-/// It can contain an extra `debug` argument for disabling the `Debug` trait
-/// generation (`#[bitfield(u64, debug = false)]`).
+/// It can contain the following additional parameters, like the `debug` argument
+/// for disabling the `Debug` trait generation (`#[bitfield(u64, debug = false)]`).
 ///
 /// Parameters of the `bitfield` attribute:
-/// - the bitfield type
+/// - the bitfield integer type (required)
+/// - `repr` specifies the bitfield's representation in memory
+/// - `from` to specify a conversion function from repr to the bitfield's integer type
+/// - `into` to specify a conversion function from the bitfield's integer type to repr
 /// - `debug` to disable the `Debug` trait generation
 /// - `default` to disable the `Default` trait generation
 /// - `order` to specify the bit order (Lsb, Msb)
@@ -47,7 +50,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let input = syn::parse2::<syn::ItemStruct>(input)?;
     let Params {
         ty,
-        inner,
+        repr,
         into,
         from,
         bits,
@@ -133,11 +136,11 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let conversion = if conversion {
         quote! {
             /// Convert from bits.
-            #vis const fn from_bits(bits: #inner) -> Self {
+            #vis const fn from_bits(bits: #repr) -> Self {
                 Self(bits)
             }
             /// Convert into bits.
-            #vis const fn into_bits(self) -> #inner {
+            #vis const fn into_bits(self) -> #repr {
                 self.0
             }
         }
@@ -149,7 +152,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         #attrs
         #[derive(Copy, Clone)]
         #[repr(transparent)]
-        #vis struct #name(#inner);
+        #vis struct #name(#repr);
 
         impl #name {
             /// Creates a new default initialized bitfield.
@@ -165,13 +168,13 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
         #default_impl
 
-        impl From<#inner> for #name {
-            fn from(v: #inner) -> Self {
+        impl From<#repr> for #name {
+            fn from(v: #repr) -> Self {
                 Self(v)
             }
         }
-        impl From<#name> for #inner {
-            fn from(v: #name) -> #inner {
+        impl From<#name> for #repr {
+            fn from(v: #name) -> #repr {
                 v.0
             }
         }
@@ -185,8 +188,8 @@ struct Member {
     offset: usize,
     bits: usize,
     base_ty: syn::Type,
-    inner_into: Option<syn::Path>,
-    inner_from: Option<syn::Path>,
+    repr_into: Option<syn::Path>,
+    repr_from: Option<syn::Path>,
     default: TokenStream,
     inner: Option<MemberInner>,
 }
@@ -204,8 +207,8 @@ impl Member {
     fn new(
         base_ty: syn::Type,
         base_bits: usize,
-        inner_into: Option<syn::Path>,
-        inner_from: Option<syn::Path>,
+        repr_into: Option<syn::Path>,
+        repr_from: Option<syn::Path>,
         f: syn::Field,
         offset: usize,
         order: Order,
@@ -274,8 +277,8 @@ impl Member {
                 offset,
                 bits,
                 base_ty,
-                inner_into,
-                inner_from,
+                repr_into,
+                repr_from,
                 default,
                 inner: Some(MemberInner {
                     ident,
@@ -295,8 +298,8 @@ impl Member {
                 offset,
                 bits,
                 base_ty,
-                inner_into,
-                inner_from,
+                repr_into,
+                repr_from,
                 default,
                 inner: None,
             })
@@ -335,8 +338,8 @@ impl ToTokens for Member {
             offset,
             bits,
             base_ty,
-            inner_into,
-            inner_from,
+            repr_into,
+            repr_from,
             default: _,
             inner:
                 Some(MemberInner {
@@ -382,7 +385,7 @@ impl ToTokens for Member {
                 #[doc = #location]
                 #vis const fn #ident(&self) -> #ty {
                     let mask = #base_ty::MAX >> (#base_ty::BITS - Self::#bits_ident as u32);
-                    let this = (#inner_into(self.0) >> Self::#offset_ident) & mask;
+                    let this = (#repr_into(self.0) >> Self::#offset_ident) & mask;
                     #from
                 }
             });
@@ -399,8 +402,8 @@ impl ToTokens for Member {
                     let mask = #base_ty::MAX >> (#base_ty::BITS - Self::#bits_ident as u32);
                     #[allow(unused_comparisons)]
                     debug_assert!(value <= mask, "value out of bounds");
-                    let bits = #inner_into(self.0) & !(mask << Self::#offset_ident) | (value & mask) << Self::#offset_ident;
-                    Self(#inner_from(bits))
+                    let bits = #repr_into(self.0) & !(mask << Self::#offset_ident) | (value & mask) << Self::#offset_ident;
+                    Self(#repr_from(bits))
                 }
 
                 #doc
@@ -678,7 +681,7 @@ enum Order {
 /// The bitfield macro parameters
 struct Params {
     ty: syn::Type,
-    inner: syn::Type,
+    repr: syn::Type,
     into: Option<syn::Path>,
     from: Option<syn::Path>,
     bits: usize,
@@ -698,7 +701,7 @@ impl Parse for Params {
             return Err(s_err(input.span(), "unsupported type"));
         }
 
-        let mut inner = ty.clone();
+        let mut repr = None;
         let mut from = None;
         let mut into = None;
         let mut debug = true;
@@ -711,8 +714,8 @@ impl Parse for Params {
             let ident = Ident::parse(input)?;
             <Token![=]>::parse(input)?;
             match ident.to_string().as_str() {
-                "inner" => {
-                    inner = input.parse()?;
+                "repr" => {
+                    repr = Some(input.parse()?);
                 }
                 "from" => {
                     from = Some(input.parse()?);
@@ -740,9 +743,16 @@ impl Parse for Params {
             };
         }
 
+        if repr.is_some() != from.is_some() || repr.is_some() != into.is_some() {
+            return Err(s_err(
+                input.span(),
+                "`repr` requires both `from` and `into`",
+            ));
+        }
+
         Ok(Self {
+            repr: repr.unwrap_or_else(|| ty.clone()),
             ty,
-            inner,
             from,
             into,
             bits,

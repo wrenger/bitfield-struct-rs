@@ -401,7 +401,7 @@ fn raw() {
 
 #[test]
 fn custom_inner() {
-    #[bitfield(u32, inner = CustomInner, from = CustomInner::from_inner, into = CustomInner::to_inner)]
+    #[bitfield(u32, repr = CustomInner, from = CustomInner::from_inner, into = CustomInner::to_inner)]
     #[derive(PartialEq, Eq)]
     struct MyBitfield {
         data: u32,
