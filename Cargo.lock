@@ -6,10 +6,17 @@ version = 3
 name = "bitfield-struct"
 version = "0.6.2"
 dependencies = [
+ "endian-num",
  "proc-macro2",
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "endian-num"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad847bb2094f110bbdd6fa564894ca4556fd978958e93985420d680d3cb6d14"
 
 [[package]]
 name = "proc-macro2"
