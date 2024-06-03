@@ -278,11 +278,11 @@ let my_byte_lsb = MyLsbByte::new()
     .with_level(2)
     .with_present(true);
 
-//                         .- present
-//                         | .- level
-//                         | |  .- system
-//                         | |  | .- kind
-assert!(my_byte_lsb.0 == 0b1_10_0_1010);
+//                          .- present
+//                          | .- level
+//                          | |  .- system
+//                          | |  | .- kind
+assert_eq!(my_byte_lsb.0, 0b1_10_0_1010);
 ```
 
 The macro generates the reverse order when Msb (most significant bit) is specified:
@@ -307,11 +307,11 @@ let my_byte_msb = MyMsbByte::new()
     .with_level(2)
     .with_present(true);
 
-//                         .- kind
-//                         |    .- system
-//                         |    | .- level
-//                         |    | |  .- present
-assert!(my_byte_msb.0 == 0b1010_0_10_1);
+//                          .- kind
+//                          |    .- system
+//                          |    | .- level
+//                          |    | |  .- present
+assert_eq!(my_byte_msb.0, 0b1010_0_10_1);
 ```
 
 ## `fmt::Debug` and `Default`
