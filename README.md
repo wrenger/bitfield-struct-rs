@@ -314,6 +314,60 @@ let my_byte_msb = MyMsbByte::new()
 assert!(my_byte_msb.0 == 0b1010_0_10_1);
 ```
 
+## Custom Representation and Endianness
+
+The macro supports custom types for the representation of the bitfield struct.
+This can be an endian-defining type like in the following examples (from [`endian-num`]) or any other struct that can be converted to and from the main bitfield type.
+
+The representation and its conversion functions can be specified with the following `#[bitfield]` parameters:
+- `repr` specifies the bitfield's representation in memory
+- `from` to specify a conversion function from repr to the bitfield's integer type
+- `into` to specify a conversion function from the bitfield's integer type to repr
+
+[`endian-num`]: https://docs.rs/endian-num
+
+This example has a little-endian byte order even on big-endian machines:
+
+```rust
+use bitfield_struct::bitfield;
+use endian_num::le16;
+
+#[bitfield(u16, repr = le16, from = le16::from_ne, into = le16::to_ne)]
+struct MyLeBitfield {
+    #[bits(4)]
+    first_nibble: u8,
+    #[bits(12)]
+    other: u16,
+}
+
+let my_be_bitfield = MyLeBitfield::new()
+    .with_first_nibble(0x1)
+    .with_other(0x234);
+
+assert_eq!(my_be_bitfield.into_bits().to_le_bytes(), [0x41, 0x23]);
+```
+
+This example has a big-endian byte order even on little-endian machines:
+
+```rust
+use bitfield_struct::bitfield;
+use endian_num::be16;
+
+#[bitfield(u16, repr = be16, from = be16::from_ne, into = be16::to_ne)]
+struct MyBeBitfield {
+    #[bits(4)]
+    first_nibble: u8,
+    #[bits(12)]
+    other: u16,
+}
+
+let my_be_bitfield = MyBeBitfield::new()
+    .with_first_nibble(0x1)
+    .with_other(0x234);
+
+assert_eq!(my_be_bitfield.into_bits().to_be_bytes(), [0x23, 0x41]);
+```
+
 ## `fmt::Debug` and `Default`
 
 This macro automatically creates a suitable `fmt::Debug` and `Default` implementations similar to the ones created for normal structs by `#[derive(Debug, Default)]`.
