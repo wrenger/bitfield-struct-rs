@@ -20,7 +20,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-bitfield-struct = "0.6"
+bitfield-struct = "0.7"
 ```
 
 ## Basics
