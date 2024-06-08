@@ -28,6 +28,7 @@ fn s_err(span: proc_macro2::Span, msg: impl fmt::Display) -> syn::Error {
 /// - `from` to specify a conversion function from repr to the bitfield's integer type
 /// - `into` to specify a conversion function from the bitfield's integer type to repr
 /// - `debug` to disable the `Debug` trait generation
+/// - `defmt` to enable the `defmt::Format` trait generation.
 /// - `default` to disable the `Default` trait generation
 /// - `order` to specify the bit order (Lsb, Msb)
 /// - `conversion` to disable the generation of into_bits and from_bits
@@ -55,6 +56,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         from,
         bits,
         debug,
+        defmt,
         default,
         order,
         conversion,
@@ -112,6 +114,42 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
                     f.debug_struct(stringify!(#name))
                         #( #debug_fields )*
                         .finish()
+                }
+            }
+        }
+    } else {
+        quote!()
+    };
+
+    let defmt_impl = if defmt {
+        let defmt_fields: Vec<_> = members.iter().flat_map(Member::defmt).collect();
+
+        // build a string like "Foo { field_name: {:?}, ... }"
+        // four braces, two to escape *this* format, times two to escape
+        // the defmt::write! call below.
+        let format_string = format!(
+            "{} {{{{ {} }}}} ",
+            name,
+            defmt_fields
+                .iter()
+                .map(|(fmt, _)| fmt.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        let format_args = defmt_fields.iter().map(|(_, arg)| arg);
+
+        // note: we use defmt paths here, not ::defmt, because many crates
+        // in the embedded space will rename defmt (e.g. to defmt_03) in
+        // order to support multiple incompatible defmt versions.
+        //
+        // defmt itself avoids ::defmt for this reason. For more info, see:
+        // https://github.com/knurling-rs/defmt/pull/835
+
+        quote! {
+            impl defmt::Format for #name {
+                fn format(&self, f: defmt::Formatter) {
+                    defmt::write!(f, #format_string, #( #format_args, )*)
                 }
             }
         }
@@ -180,6 +218,8 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         }
 
         #debug_impl
+
+        #defmt_impl
     })
 }
 
@@ -314,6 +354,38 @@ impl Member {
             }
         }
         quote!()
+    }
+
+    /// Returns (format_string, argument) tuple.
+    fn defmt(&self) -> Option<(String, TokenStream)> {
+        let inner = self.inner.as_ref()?;
+
+        if inner.from.is_empty() {
+            return None;
+        }
+
+        // default to using {:?}
+        let mut spec = "{:?}".to_owned();
+
+        // primitives supported by defmt
+        const PRIMITIVES: &[&str] = &[
+            "bool", "usize", "isize", "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64",
+            "i128", "f32", "f64",
+        ];
+
+        // get the type name so we can use more efficient defmt formats
+        // if it's a primitive
+        if let syn::Type::Path(syn::TypePath { ref path, .. }) = inner.ty {
+            if let Some(ident) = path.get_ident() {
+                if PRIMITIVES.iter().any(|s| ident == s) {
+                    // defmt supports this primitive, use special spec
+                    spec = format!("{{={}}}", ident);
+                }
+            }
+        }
+
+        let ident = &inner.ident;
+        Some((format!("{}: {}", ident, spec), quote!(self.#ident())))
     }
 
     fn default(&self) -> TokenStream {
@@ -686,6 +758,7 @@ struct Params {
     from: Option<syn::Path>,
     bits: usize,
     debug: bool,
+    defmt: bool,
     default: bool,
     order: Order,
     conversion: bool,
@@ -705,6 +778,7 @@ impl Parse for Params {
         let mut from = None;
         let mut into = None;
         let mut debug = true;
+        let mut defmt = false;
         let mut default = true;
         let mut order = Order::Lsb;
         let mut conversion = true;
@@ -725,6 +799,9 @@ impl Parse for Params {
                 }
                 "debug" => {
                     debug = syn::LitBool::parse(input)?.value;
+                }
+                "defmt" => {
+                    defmt = syn::LitBool::parse(input)?.value;
                 }
                 "default" => {
                     default = syn::LitBool::parse(input)?.value;
@@ -757,6 +834,7 @@ impl Parse for Params {
             into,
             bits,
             debug,
+            defmt,
             default,
             order,
             conversion,
