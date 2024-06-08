@@ -878,11 +878,21 @@ mod test {
     fn parse_args() {
         let args = quote!(u64);
         let params = syn::parse2::<Params>(args).unwrap();
-        assert!(params.bits == u64::BITS as usize && params.debug == true);
+        assert_eq!(params.bits, u64::BITS as usize);
+        assert_eq!(params.debug, true);
+        assert_eq!(params.defmt, false);
 
         let args = quote!(u32, debug = false);
         let params = syn::parse2::<Params>(args).unwrap();
-        assert!(params.bits == u32::BITS as usize && params.debug == false);
+        assert_eq!(params.bits, u32::BITS as usize);
+        assert_eq!(params.debug, false);
+        assert_eq!(params.defmt, false);
+
+        let args = quote!(u32, defmt = true);
+        let params = syn::parse2::<Params>(args).unwrap();
+        assert_eq!(params.bits, u32::BITS as usize);
+        assert_eq!(params.debug, true);
+        assert_eq!(params.defmt, true);
 
         let args = quote!(u32, order = Msb);
         let params = syn::parse2::<Params>(args).unwrap();

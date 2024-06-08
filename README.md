@@ -13,6 +13,7 @@ As this library provides a procedural macro, it has no runtime dependencies and 
 - Rust-analyzer friendly (carries over documentation to accessor functions)
 - Exports field offsets and sizes as constants (useful for const asserts)
 - Generation of `fmt::Debug` and `Default`
+- Optional generation of `defmt::Format`
 
 ## Usage
 
@@ -395,3 +396,16 @@ impl Default for CustomDebug {
 let val = CustomDebug::default();
 println!("{val:?}")
 ```
+
+## `defmt::Format`
+
+This macro can automatically implement a `defmt::Format` that mirrors the default `fmt::Debug` implementation by passing the extra `defmt` argument. This implementation requires the defmt crate to be available as `defmt`, and has the same rules and caveats as `#[derive(defmt::Format)]`.
+
+```rust
+use bitfield_struct::bitfield;
+
+#[bitfield(u64, defmt = true)]
+struct DefmtExample {
+    data: u64
+}
+````
