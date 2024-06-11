@@ -106,56 +106,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         ));
     }
 
-    let debug_impl = if debug {
-        let debug_fields = members.iter().map(Member::debug);
-        quote! {
-            impl core::fmt::Debug for #name {
-                fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                    f.debug_struct(stringify!(#name))
-                        #( #debug_fields )*
-                        .finish()
-                }
-            }
-        }
-    } else {
-        quote!()
-    };
-
-    let defmt_impl = if defmt {
-        let defmt_fields: Vec<_> = members.iter().flat_map(Member::defmt).collect();
-
-        // build a string like "Foo { field_name: {:?}, ... }"
-        // four braces, two to escape *this* format, times two to escape
-        // the defmt::write! call below.
-        let format_string = format!(
-            "{} {{{{ {} }}}} ",
-            name,
-            defmt_fields
-                .iter()
-                .map(|(fmt, _)| fmt.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-
-        let format_args = defmt_fields.iter().map(|(_, arg)| arg);
-
-        // note: we use defmt paths here, not ::defmt, because many crates
-        // in the embedded space will rename defmt (e.g. to defmt_03) in
-        // order to support multiple incompatible defmt versions.
-        //
-        // defmt itself avoids ::defmt for this reason. For more info, see:
-        // https://github.com/knurling-rs/defmt/pull/835
-
-        quote! {
-            impl defmt::Format for #name {
-                fn format(&self, f: defmt::Formatter) {
-                    defmt::write!(f, #format_string, #( #format_args, )*)
-                }
-            }
-        }
-    } else {
-        quote!()
-    };
+    let debug_impl = implement_debug(debug, defmt, &name, &members);
 
     let defaults = members.iter().map(Member::default);
 
@@ -218,9 +169,112 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         }
 
         #debug_impl
+    })
+}
+
+fn implement_debug(debug: bool, defmt: bool, name: &syn::Ident, members: &[Member]) -> TokenStream {
+    let debug_impl = if debug {
+        let fields = members.iter().flat_map(|m| {
+            let inner = m.inner.as_ref()?;
+
+            if inner.from.is_empty() {
+                return None;
+            }
+
+            let ident = &inner.ident;
+            Some(quote!(.field(stringify!(#ident), &self.#ident())))
+        });
+
+        quote! {
+            impl core::fmt::Debug for #name {
+                fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                    f.debug_struct(stringify!(#name))
+                        #( #fields )*
+                        .finish()
+                }
+            }
+        }
+    } else {
+        quote!()
+    };
+
+    let defmt_impl = if defmt {
+        // build a part of the format string for each field
+        let formats = members.iter().flat_map(|m| {
+            let inner = m.inner.as_ref()?;
+
+            if inner.from.is_empty() {
+                return None;
+            }
+
+            // default to using {:?}
+            let mut spec = "{:?}".to_owned();
+
+            // primitives supported by defmt
+            const PRIMITIVES: &[&str] = &[
+                "bool", "usize", "isize", "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32",
+                "i64", "i128", "f32", "f64",
+            ];
+
+            // get the type name so we can use more efficient defmt formats
+            // if it's a primitive
+            if let syn::Type::Path(syn::TypePath { path, .. }) = &inner.ty {
+                if let Some(ident) = path.get_ident() {
+                    if PRIMITIVES.iter().any(|s| ident == s) {
+                        // defmt supports this primitive, use special spec
+                        spec = format!("{{={}}}", ident);
+                    }
+                }
+            }
+
+            let ident = &inner.ident;
+            Some(format!("{ident}: {spec}"))
+        });
+
+        // find the corresponding format argument for each field
+        let args = members.iter().flat_map(|m| {
+            let inner = m.inner.as_ref()?;
+
+            if inner.from.is_empty() {
+                return None;
+            }
+
+            let ident = &inner.ident;
+            Some(quote!(self.#ident()))
+        });
+
+        // build a string like "Foo { field_name: {:?}, ... }"
+        // four braces, two to escape *this* format, times two to escape
+        // the defmt::write! call below.
+        let format_string = format!(
+            "{} {{{{ {} }}}} ",
+            name,
+            formats.collect::<Vec<_>>().join(", ")
+        );
+
+        // note: we use defmt paths here, not ::defmt, because many crates
+        // in the embedded space will rename defmt (e.g. to defmt_03) in
+        // order to support multiple incompatible defmt versions.
+        //
+        // defmt itself avoids ::defmt for this reason. For more info, see:
+        // https://github.com/knurling-rs/defmt/pull/835
+
+        quote! {
+            impl defmt::Format for #name {
+                fn format(&self, f: defmt::Formatter) {
+                    defmt::write!(f, #format_string, #( #args, )*)
+                }
+            }
+        }
+    } else {
+        quote!()
+    };
+
+    quote!(
+        #debug_impl
 
         #defmt_impl
-    })
+    )
 }
 
 /// Represents a member where accessor functions should be generated for.
@@ -344,48 +398,6 @@ impl Member {
                 inner: None,
             })
         }
-    }
-
-    fn debug(&self) -> TokenStream {
-        if let Some(inner) = &self.inner {
-            if !inner.from.is_empty() {
-                let ident = &inner.ident;
-                return quote!(.field(stringify!(#ident), &self.#ident()));
-            }
-        }
-        quote!()
-    }
-
-    /// Returns (format_string, argument) tuple.
-    fn defmt(&self) -> Option<(String, TokenStream)> {
-        let inner = self.inner.as_ref()?;
-
-        if inner.from.is_empty() {
-            return None;
-        }
-
-        // default to using {:?}
-        let mut spec = "{:?}".to_owned();
-
-        // primitives supported by defmt
-        const PRIMITIVES: &[&str] = &[
-            "bool", "usize", "isize", "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64",
-            "i128", "f32", "f64",
-        ];
-
-        // get the type name so we can use more efficient defmt formats
-        // if it's a primitive
-        if let syn::Type::Path(syn::TypePath { ref path, .. }) = inner.ty {
-            if let Some(ident) = path.get_ident() {
-                if PRIMITIVES.iter().any(|s| ident == s) {
-                    // defmt supports this primitive, use special spec
-                    spec = format!("{{={}}}", ident);
-                }
-            }
-        }
-
-        let ident = &inner.ident;
-        Some((format!("{}: {}", ident, spec), quote!(self.#ident())))
     }
 
     fn default(&self) -> TokenStream {
