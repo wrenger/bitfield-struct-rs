@@ -134,7 +134,6 @@ fn debug() {
 }
 
 // a dummy defmt logger and timestamp implementation, for testing
-#[cfg(test)]
 mod defmt_logger {
     #[defmt::global_logger]
     struct Logger;
