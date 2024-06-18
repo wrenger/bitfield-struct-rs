@@ -60,7 +60,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         default,
         order,
         conversion,
-    } = syn::parse2::<Params>(args)?;
+    } = syn::parse2(args)?;
 
     let span = input.fields.span();
     let name = input.ident;
@@ -106,11 +106,17 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         ));
     }
 
-    let debug_impl = implement_debug(debug, defmt, &name, &members);
+    let mut impl_debug = TokenStream::new();
+    if debug {
+        impl_debug.extend(implement_debug(&name, &members));
+    }
+    if defmt {
+        impl_debug.extend(implement_defmt(&name, &members));
+    }
 
     let defaults = members.iter().map(Member::default);
 
-    let default_impl = if default {
+    let impl_default = default.then(|| {
         quote! {
             impl Default for #name {
                 fn default() -> Self {
@@ -118,11 +124,9 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
                 }
             }
         }
-    } else {
-        quote!()
-    };
+    });
 
-    let conversion = if conversion {
+    let conversion = conversion.then(|| {
         quote! {
             /// Convert from bits.
             #vis const fn from_bits(bits: #repr) -> Self {
@@ -133,9 +137,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
                 self.0
             }
         }
-    } else {
-        quote!()
-    };
+    });
 
     Ok(quote! {
         #attrs
@@ -155,7 +157,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             #( #members )*
         }
 
-        #default_impl
+        #impl_default
 
         impl From<#repr> for #name {
             fn from(v: #repr) -> Self {
@@ -168,113 +170,95 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             }
         }
 
-        #debug_impl
+        #impl_debug
     })
 }
 
-fn implement_debug(debug: bool, defmt: bool, name: &syn::Ident, members: &[Member]) -> TokenStream {
-    let debug_impl = if debug {
-        let fields = members.iter().flat_map(|m| {
-            let inner = m.inner.as_ref()?;
+fn implement_debug(name: &syn::Ident, members: &[Member]) -> TokenStream {
+    let fields = members.iter().flat_map(|m| {
+        let inner = m.inner.as_ref()?;
+        if inner.from.is_empty() {
+            return None;
+        }
 
-            if inner.from.is_empty() {
-                return None;
+        let ident = &inner.ident;
+        Some(quote!(.field(stringify!(#ident), &self.#ident())))
+    });
+
+    quote! {
+        impl core::fmt::Debug for #name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.debug_struct(stringify!(#name))
+                    #( #fields )*
+                    .finish()
             }
+        }
+    }
+}
 
-            let ident = &inner.ident;
-            Some(quote!(.field(stringify!(#ident), &self.#ident())))
-        });
+fn implement_defmt(name: &syn::Ident, members: &[Member]) -> TokenStream {
+    // build a part of the format string for each field
+    let formats = members.iter().flat_map(|m| {
+        let inner = m.inner.as_ref()?;
+        if inner.from.is_empty() {
+            return None;
+        }
 
-        quote! {
-            impl core::fmt::Debug for #name {
-                fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                    f.debug_struct(stringify!(#name))
-                        #( #fields )*
-                        .finish()
+        // primitives supported by defmt
+        const PRIMITIVES: &[&str] = &[
+            "bool", "usize", "isize", //
+            "u8", "u16", "u32", "u64", "u128", //
+            "i8", "i16", "i32", "i64", "i128", //
+            "f32", "f64", //
+        ];
+
+        // get the type name so we can use more efficient defmt formats
+        // if it's a primitive
+        if let syn::Type::Path(syn::TypePath { path, .. }) = &inner.ty {
+            if let Some(ident) = path.get_ident() {
+                if PRIMITIVES.iter().any(|s| ident == s) {
+                    // defmt supports this primitive, use special spec
+                    return Some(format!("{}: {{={ident}}}", inner.ident));
                 }
             }
         }
-    } else {
-        quote!()
-    };
 
-    let defmt_impl = if defmt {
-        // build a part of the format string for each field
-        let formats = members.iter().flat_map(|m| {
-            let inner = m.inner.as_ref()?;
+        Some(format!("{}: {{:?}}", inner.ident))
+    });
 
-            if inner.from.is_empty() {
-                return None;
-            }
+    // find the corresponding format argument for each field
+    let args = members.iter().flat_map(|m| {
+        let inner = m.inner.as_ref()?;
+        if inner.from.is_empty() {
+            return None;
+        }
 
-            // default to using {:?}
-            let mut spec = "{:?}".to_owned();
+        let ident = &inner.ident;
+        Some(quote!(self.#ident()))
+    });
 
-            // primitives supported by defmt
-            const PRIMITIVES: &[&str] = &[
-                "bool", "usize", "isize", "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32",
-                "i64", "i128", "f32", "f64",
-            ];
+    // build a string like "Foo { field_name: {:?}, ... }"
+    // four braces, two to escape *this* format, times two to escape
+    // the defmt::write! call below.
+    let format_string = format!(
+        "{name} {{{{ {} }}}} ",
+        formats.collect::<Vec<_>>().join(", ")
+    );
 
-            // get the type name so we can use more efficient defmt formats
-            // if it's a primitive
-            if let syn::Type::Path(syn::TypePath { path, .. }) = &inner.ty {
-                if let Some(ident) = path.get_ident() {
-                    if PRIMITIVES.iter().any(|s| ident == s) {
-                        // defmt supports this primitive, use special spec
-                        spec = format!("{{={}}}", ident);
-                    }
-                }
-            }
+    // note: we use defmt paths here, not ::defmt, because many crates
+    // in the embedded space will rename defmt (e.g. to defmt_03) in
+    // order to support multiple incompatible defmt versions.
+    //
+    // defmt itself avoids ::defmt for this reason. For more info, see:
+    // https://github.com/knurling-rs/defmt/pull/835
 
-            let ident = &inner.ident;
-            Some(format!("{ident}: {spec}"))
-        });
-
-        // find the corresponding format argument for each field
-        let args = members.iter().flat_map(|m| {
-            let inner = m.inner.as_ref()?;
-
-            if inner.from.is_empty() {
-                return None;
-            }
-
-            let ident = &inner.ident;
-            Some(quote!(self.#ident()))
-        });
-
-        // build a string like "Foo { field_name: {:?}, ... }"
-        // four braces, two to escape *this* format, times two to escape
-        // the defmt::write! call below.
-        let format_string = format!(
-            "{} {{{{ {} }}}} ",
-            name,
-            formats.collect::<Vec<_>>().join(", ")
-        );
-
-        // note: we use defmt paths here, not ::defmt, because many crates
-        // in the embedded space will rename defmt (e.g. to defmt_03) in
-        // order to support multiple incompatible defmt versions.
-        //
-        // defmt itself avoids ::defmt for this reason. For more info, see:
-        // https://github.com/knurling-rs/defmt/pull/835
-
-        quote! {
-            impl defmt::Format for #name {
-                fn format(&self, f: defmt::Formatter) {
-                    defmt::write!(f, #format_string, #( #args, )*)
-                }
+    quote! {
+        impl defmt::Format for #name {
+            fn format(&self, f: defmt::Formatter) {
+                defmt::write!(f, #format_string, #( #args, )*)
             }
         }
-    } else {
-        quote!()
-    };
-
-    quote!(
-        #debug_impl
-
-        #defmt_impl
-    )
+    }
 }
 
 /// Represents a member where accessor functions should be generated for.
@@ -591,54 +575,56 @@ fn parse_field(
         else {
             continue;
         };
-        if path.is_ident("bits") {
-            let span = tokens.span();
-            let BitsAttr {
-                bits,
-                default,
-                into,
-                from,
-                access,
-            } = syn::parse2(tokens.clone()).map_err(|e| malformed(e, attr))?;
+        if !path.is_ident("bits") {
+            continue;
+        }
 
-            // bit size
-            if let Some(bits) = bits {
-                if bits == 0 {
-                    return Err(s_err(span, "bits cannot bit 0"));
-                }
-                if ty_bits != 0 && bits > ty_bits {
-                    return Err(s_err(span, "overflowing field type"));
-                }
-                ret.bits = bits;
-            }
+        let span = tokens.span();
+        let BitsAttr {
+            bits,
+            default,
+            into,
+            from,
+            access,
+        } = syn::parse2(tokens.clone()).map_err(|e| malformed(e, attr))?;
 
-            // read/write access
-            if let Some(access) = access {
-                if ignore {
-                    return Err(s_err(
-                        tokens.span(),
-                        "'access' is not supported for padding",
-                    ));
-                }
-                ret.access = access;
+        // bit size
+        if let Some(bits) = bits {
+            if bits == 0 {
+                return Err(s_err(span, "bits cannot bit 0"));
             }
+            if ty_bits != 0 && bits > ty_bits {
+                return Err(s_err(span, "overflowing field type"));
+            }
+            ret.bits = bits;
+        }
 
-            // conversion
-            if let Some(into) = into {
-                if ret.access == Access::None {
-                    return Err(s_err(into.span(), "'into' is not supported on padding"));
-                }
-                ret.into = quote!(#into(this) as _);
+        // read/write access
+        if let Some(access) = access {
+            if ignore {
+                return Err(s_err(
+                    tokens.span(),
+                    "'access' is not supported for padding",
+                ));
             }
-            if let Some(from) = from {
-                if ret.access == Access::None {
-                    return Err(s_err(from.span(), "'from' is not supported on padding"));
-                }
-                ret.from = quote!(#from(this as _));
+            ret.access = access;
+        }
+
+        // conversion
+        if let Some(into) = into {
+            if ret.access == Access::None {
+                return Err(s_err(into.span(), "'into' is not supported on padding"));
             }
-            if let Some(default) = default {
-                ret.default = default.into_token_stream();
+            ret.into = quote!(#into(this) as _);
+        }
+        if let Some(from) = from {
+            if ret.access == Access::None {
+                return Err(s_err(from.span(), "'from' is not supported on padding"));
             }
+            ret.from = quote!(#from(this as _));
+        }
+        if let Some(default) = default {
+            ret.default = default.into_token_stream();
         }
     }
 
@@ -786,14 +772,18 @@ impl Parse for Params {
             return Err(s_err(input.span(), "unsupported type"));
         }
 
-        let mut repr = None;
-        let mut from = None;
-        let mut into = None;
-        let mut debug = true;
-        let mut defmt = false;
-        let mut default = true;
-        let mut order = Order::Lsb;
-        let mut conversion = true;
+        let mut ret = Params {
+            repr: ty.clone(),
+            ty,
+            into: None,
+            from: None,
+            bits,
+            debug: true,
+            defmt: false,
+            default: true,
+            order: Order::Lsb,
+            conversion: true,
+        };
 
         // try parse additional args
         while <Token![,]>::parse(input).is_ok() {
@@ -801,56 +791,45 @@ impl Parse for Params {
             <Token![=]>::parse(input)?;
             match ident.to_string().as_str() {
                 "repr" => {
-                    repr = Some(input.parse()?);
+                    ret.repr = input.parse()?;
                 }
                 "from" => {
-                    from = Some(input.parse()?);
+                    ret.from = Some(input.parse()?);
                 }
                 "into" => {
-                    into = Some(input.parse()?);
+                    ret.into = Some(input.parse()?);
                 }
                 "debug" => {
-                    debug = syn::LitBool::parse(input)?.value;
+                    ret.debug = syn::LitBool::parse(input)?.value;
                 }
                 "defmt" => {
-                    defmt = syn::LitBool::parse(input)?.value;
+                    ret.defmt = syn::LitBool::parse(input)?.value;
                 }
                 "default" => {
-                    default = syn::LitBool::parse(input)?.value;
+                    ret.default = syn::LitBool::parse(input)?.value;
                 }
                 "order" => {
-                    order = match syn::Ident::parse(input)?.to_string().as_str() {
+                    ret.order = match syn::Ident::parse(input)?.to_string().as_str() {
                         "Msb" | "msb" => Order::Msb,
                         "Lsb" | "lsb" => Order::Lsb,
                         _ => return Err(s_err(ident.span(), "unknown value for order")),
                     };
                 }
                 "conversion" => {
-                    conversion = syn::LitBool::parse(input)?.value;
+                    ret.conversion = syn::LitBool::parse(input)?.value;
                 }
                 _ => return Err(s_err(ident.span(), "unknown argument")),
             };
         }
 
-        if repr.is_some() != from.is_some() || repr.is_some() != into.is_some() {
+        if (ret.repr != ret.ty) && (!ret.from.is_some() || !ret.into.is_some()) {
             return Err(s_err(
                 input.span(),
                 "`repr` requires both `from` and `into`",
             ));
         }
 
-        Ok(Self {
-            repr: repr.unwrap_or_else(|| ty.clone()),
-            ty,
-            from,
-            into,
-            bits,
-            debug,
-            defmt,
-            default,
-            order,
-            conversion,
-        })
+        Ok(ret)
     }
 }
 
