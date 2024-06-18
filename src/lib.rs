@@ -822,7 +822,7 @@ impl Parse for Params {
             };
         }
 
-        if (ret.repr != ret.ty) && (!ret.from.is_some() || !ret.into.is_some()) {
+        if ret.repr != ret.ty && (ret.from.is_none() || ret.into.is_none()) {
             return Err(s_err(
                 input.span(),
                 "`repr` requires both `from` and `into`",
