@@ -133,6 +133,106 @@ fn debug() {
     println!("{full:?}");
 }
 
+// a dummy defmt logger and timestamp implementation, for testing
+mod defmt_logger {
+    #[defmt::global_logger]
+    struct Logger;
+
+    unsafe impl defmt::Logger for Logger {
+        fn acquire() {}
+        unsafe fn flush() {}
+        unsafe fn release() {}
+        unsafe fn write(_bytes: &[u8]) {}
+    }
+
+    defmt::timestamp!("");
+}
+
+#[test]
+fn defmt() {
+    #[bitfield(u64, defmt = true)]
+    struct Full {
+        data: u64,
+    }
+
+    let full = Full::new().with_data(123);
+    defmt::println!("{:?}", full);
+}
+
+#[test]
+fn defmt_primitives() {
+    #[bitfield(u128, defmt = true)]
+    struct Unsigned {
+        a: bool,
+        #[bits(7)]
+        __: u8,
+        b: u8,
+        c: u16,
+        d: u32,
+        e: u64,
+    }
+
+    defmt::println!("{}", Unsigned::new());
+
+    #[bitfield(u128, defmt = true)]
+    struct FullUnsigned {
+        data: u128,
+    }
+
+    defmt::println!("{}", FullUnsigned::new());
+
+    #[bitfield(u128, defmt = true)]
+    struct Signed {
+        a: bool,
+        #[bits(7)]
+        __: u8,
+        b: i8,
+        c: i16,
+        d: i32,
+        e: i64,
+    }
+
+    defmt::println!("{}", Signed::new());
+
+    #[bitfield(u128, defmt = true)]
+    struct FullSigned {
+        data: i128,
+    }
+
+    defmt::println!("{}", FullSigned::new());
+
+    #[bitfield(u128, defmt = true)]
+    struct Size {
+        #[bits(64)]
+        a: usize,
+        #[bits(64)]
+        b: usize,
+    }
+
+    defmt::println!("{}", Size::new());
+
+    const fn f32_from_bits(_bits: u32) -> f32 {
+        // just for testing
+        0.0
+    }
+
+    const fn f64_from_bits(_bits: u64) -> f64 {
+        // just for testing
+        0.0
+    }
+
+    #[bitfield(u128, defmt = true)]
+    struct Float {
+        __: u32,
+        #[bits(32, from = f32_from_bits, access = RO)]
+        a: f32,
+        #[bits(64, from = f64_from_bits, access = RO)]
+        b: f64,
+    }
+
+    defmt::println!("{}", Float::new());
+}
+
 #[test]
 fn positive() {
     #[bitfield(u32)]
