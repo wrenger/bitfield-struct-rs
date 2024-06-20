@@ -234,6 +234,18 @@ fn defmt_primitives() {
 }
 
 #[test]
+fn debug_cfg() {
+    /// We have a custom debug implementation -> opt out
+    #[bitfield(u64, debug = cfg(test), defmt = cfg(target_has_atomic = "64"))]
+    struct Full {
+        data: u64,
+    }
+
+    let full = Full::new().with_data(123);
+    println!("{full:?}");
+}
+
+#[test]
 fn positive() {
     #[bitfield(u32)]
     struct MyBitfield {

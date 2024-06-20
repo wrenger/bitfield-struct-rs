@@ -107,11 +107,11 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     }
 
     let mut impl_debug = TokenStream::new();
-    if debug {
-        impl_debug.extend(implement_debug(&name, &members));
+    if let Some(cfg) = debug.cfg() {
+        impl_debug.extend(implement_debug(&name, &members, cfg));
     }
-    if defmt {
-        impl_debug.extend(implement_defmt(&name, &members));
+    if let Some(cfg) = defmt.cfg() {
+        impl_debug.extend(implement_defmt(&name, &members, cfg));
     }
 
     let defaults = members.iter().map(Member::default);
@@ -174,7 +174,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     })
 }
 
-fn implement_debug(name: &syn::Ident, members: &[Member]) -> TokenStream {
+fn implement_debug(name: &syn::Ident, members: &[Member], cfg: Option<TokenStream>) -> TokenStream {
     let fields = members.iter().flat_map(|m| {
         let inner = m.inner.as_ref()?;
         if inner.from.is_empty() {
@@ -185,7 +185,10 @@ fn implement_debug(name: &syn::Ident, members: &[Member]) -> TokenStream {
         Some(quote!(.field(stringify!(#ident), &self.#ident())))
     });
 
+    let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
+
     quote! {
+        #attr
         impl core::fmt::Debug for #name {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.debug_struct(stringify!(#name))
@@ -196,7 +199,7 @@ fn implement_debug(name: &syn::Ident, members: &[Member]) -> TokenStream {
     }
 }
 
-fn implement_defmt(name: &syn::Ident, members: &[Member]) -> TokenStream {
+fn implement_defmt(name: &syn::Ident, members: &[Member], cfg: Option<TokenStream>) -> TokenStream {
     // build a part of the format string for each field
     let formats = members.iter().flat_map(|m| {
         let inner = m.inner.as_ref()?;
@@ -245,14 +248,16 @@ fn implement_defmt(name: &syn::Ident, members: &[Member]) -> TokenStream {
         formats.collect::<Vec<_>>().join(", ")
     );
 
+    let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
+
     // note: we use defmt paths here, not ::defmt, because many crates
     // in the embedded space will rename defmt (e.g. to defmt_03) in
     // order to support multiple incompatible defmt versions.
     //
     // defmt itself avoids ::defmt for this reason. For more info, see:
     // https://github.com/knurling-rs/defmt/pull/835
-
     quote! {
+        #attr
         impl defmt::Format for #name {
             fn format(&self, f: defmt::Formatter) {
                 defmt::write!(f, #format_string, #( #args, )*)
@@ -748,6 +753,41 @@ enum Order {
     Msb,
 }
 
+#[derive(Debug, Clone)]
+enum Enable {
+    Yes,
+    No,
+    Cfg(TokenStream),
+}
+impl Enable {
+    fn cfg(self) -> Option<Option<TokenStream>> {
+        match self {
+            Enable::No => None,
+            Enable::Yes => Some(None),
+            Enable::Cfg(c) => Some(Some(c)),
+        }
+    }
+}
+impl Parse for Enable {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(if let Ok(lit_bool) = syn::LitBool::parse(input) {
+            if lit_bool.value {
+                Enable::Yes
+            } else {
+                Enable::No
+            }
+        } else {
+            let meta = syn::MetaList::parse(input)?;
+            if matches!(meta.delimiter, syn::MacroDelimiter::Paren(_)) && meta.path.is_ident("cfg")
+            {
+                Enable::Cfg(meta.tokens)
+            } else {
+                return Err(s_err(meta.span(), "Only `cfg` attributes are allowed"));
+            }
+        })
+    }
+}
+
 /// The bitfield macro parameters
 struct Params {
     ty: syn::Type,
@@ -755,8 +795,8 @@ struct Params {
     into: Option<syn::Path>,
     from: Option<syn::Path>,
     bits: usize,
-    debug: bool,
-    defmt: bool,
+    debug: Enable,
+    defmt: Enable,
     default: bool,
     order: Order,
     conversion: bool,
@@ -778,8 +818,8 @@ impl Parse for Params {
             into: None,
             from: None,
             bits,
-            debug: true,
-            defmt: false,
+            debug: Enable::Yes,
+            defmt: Enable::No,
             default: true,
             order: Order::Lsb,
             conversion: true,
@@ -800,10 +840,10 @@ impl Parse for Params {
                     ret.into = Some(input.parse()?);
                 }
                 "debug" => {
-                    ret.debug = syn::LitBool::parse(input)?.value;
+                    ret.debug = input.parse()?;
                 }
                 "defmt" => {
-                    ret.defmt = syn::LitBool::parse(input)?.value;
+                    ret.defmt = input.parse()?;
                 }
                 "default" => {
                     ret.default = syn::LitBool::parse(input)?.value;
@@ -863,27 +903,33 @@ fn type_bits(ty: &syn::Type) -> (TypeClass, usize) {
 mod test {
     use quote::quote;
 
-    use crate::{Access, BitsAttr, Order, Params};
+    use crate::{Access, BitsAttr, Enable, Order, Params};
 
     #[test]
     fn parse_args() {
         let args = quote!(u64);
         let params = syn::parse2::<Params>(args).unwrap();
         assert_eq!(params.bits, u64::BITS as usize);
-        assert_eq!(params.debug, true);
-        assert_eq!(params.defmt, false);
+        assert!(matches!(params.debug, Enable::Yes));
+        assert!(matches!(params.defmt, Enable::No));
 
         let args = quote!(u32, debug = false);
         let params = syn::parse2::<Params>(args).unwrap();
         assert_eq!(params.bits, u32::BITS as usize);
-        assert_eq!(params.debug, false);
-        assert_eq!(params.defmt, false);
+        assert!(matches!(params.debug, Enable::No));
+        assert!(matches!(params.defmt, Enable::No));
 
         let args = quote!(u32, defmt = true);
         let params = syn::parse2::<Params>(args).unwrap();
         assert_eq!(params.bits, u32::BITS as usize);
-        assert_eq!(params.debug, true);
-        assert_eq!(params.defmt, true);
+        assert!(matches!(params.debug, Enable::Yes));
+        assert!(matches!(params.defmt, Enable::Yes));
+
+        let args = quote!(u32, defmt = cfg(test), debug = cfg(feature = "foo"));
+        let params = syn::parse2::<Params>(args).unwrap();
+        assert_eq!(params.bits, u32::BITS as usize);
+        assert!(matches!(params.debug, Enable::Cfg(_)));
+        assert!(matches!(params.defmt, Enable::Cfg(_)));
 
         let args = quote!(u32, order = Msb);
         let params = syn::parse2::<Params>(args).unwrap();
