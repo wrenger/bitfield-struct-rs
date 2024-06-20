@@ -116,8 +116,10 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
     let defaults = members.iter().map(Member::default);
 
-    let impl_default = default.then(|| {
+    let impl_default = default.cfg().map(|cfg| {
+        let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
         quote! {
+            #attr
             impl Default for #name {
                 fn default() -> Self {
                     Self::new()
@@ -755,8 +757,8 @@ enum Order {
 
 #[derive(Debug, Clone)]
 enum Enable {
-    Yes,
     No,
+    Yes,
     Cfg(TokenStream),
 }
 impl Enable {
@@ -797,7 +799,7 @@ struct Params {
     bits: usize,
     debug: Enable,
     defmt: Enable,
-    default: bool,
+    default: Enable,
     order: Order,
     conversion: bool,
 }
@@ -820,7 +822,7 @@ impl Parse for Params {
             bits,
             debug: Enable::Yes,
             defmt: Enable::No,
-            default: true,
+            default: Enable::Yes,
             order: Order::Lsb,
             conversion: true,
         };
@@ -846,7 +848,7 @@ impl Parse for Params {
                     ret.defmt = input.parse()?;
                 }
                 "default" => {
-                    ret.default = syn::LitBool::parse(input)?.value;
+                    ret.default = input.parse()?;
                 }
                 "order" => {
                     ret.order = match syn::Ident::parse(input)?.to_string().as_str() {

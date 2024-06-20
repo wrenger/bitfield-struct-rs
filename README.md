@@ -6,14 +6,14 @@
 Procedural macro for bitfields that allows specifying bitfields as structs.
 As this library provides a procedural macro, it has no runtime dependencies and works for `no-std` environments.
 
-- Supports bool flags, raw integers, and every custom type convertible into integers (structs/enums)
 - Ideal for driver/OS/embedded development (defining HW registers/structures)
+- Supports bool flags, integers, and custom types convertible into integers (structs/enums)
 - Generates minimalistic, pure, safe rust functions
 - Compile-time checks for type and field sizes
-- Rust-analyzer friendly (carries over documentation to accessor functions)
+- Rust-analyzer/docrs friendly (carries over docs to accessor functions)
 - Exports field offsets and sizes as constants (useful for const asserts)
-- Generation of `fmt::Debug` and `Default`
-- Optional generation of `defmt::Format`
+- Generation of `Default`, `fmt::Debug`, or `defmt::Format` traits
+- Custom internal representation (endianness)
 
 ## Usage
 
@@ -254,7 +254,7 @@ struct Nested {
 }
 ```
 
-## Bit Order
+## Field Order
 
 The optional `order` macro argument determines the layout of the bits, with the default being
 Lsb (least significant bit) first:
@@ -264,7 +264,7 @@ use bitfield_struct::bitfield;
 
 #[bitfield(u8, order = Lsb)]
 struct MyLsbByte {
-    /// The first field occupies the least significant bits
+    /// The first field occupies the *least* significant bits
     #[bits(4)]
     kind: usize,
     system: bool,
@@ -272,7 +272,6 @@ struct MyLsbByte {
     level: usize,
     present: bool
 }
-
 let my_byte_lsb = MyLsbByte::new()
     .with_kind(10)
     .with_system(false)
@@ -293,7 +292,7 @@ use bitfield_struct::bitfield;
 
 #[bitfield(u8, order = Msb)]
 struct MyMsbByte {
-    /// The first field occupies the most significant bits
+    /// The first field occupies the *most* significant bits
     #[bits(4)]
     kind: usize,
     system: bool,
@@ -301,7 +300,6 @@ struct MyMsbByte {
     level: usize,
     present: bool
 }
-
 let my_byte_msb = MyMsbByte::new()
     .with_kind(10)
     .with_system(false)
@@ -369,7 +367,7 @@ let my_be_bitfield = MyBeBitfield::new()
 assert_eq!(my_be_bitfield.into_bits().to_be_bytes(), [0x23, 0x41]);
 ```
 
-## `fmt::Debug` and `Default`
+## Automatic Trait Implementations
 
 This macro automatically creates a suitable `fmt::Debug` and `Default` implementations similar to the ones created for normal structs by `#[derive(Debug, Default)]`.
 You can disable this with the extra `debug` and `default` arguments.
@@ -397,9 +395,10 @@ let val = CustomDebug::default();
 println!("{val:?}")
 ```
 
-## `defmt::Format`
+### Support for `defmt::Format`
 
-This macro can automatically implement a `defmt::Format` that mirrors the default `fmt::Debug` implementation by passing the extra `defmt` argument. This implementation requires the defmt crate to be available as `defmt`, and has the same rules and caveats as `#[derive(defmt::Format)]`.
+This macro can automatically implement a `defmt::Format` that mirrors the default `fmt::Debug` implementation by passing the extra `defmt` argument.
+This implementation requires the defmt crate to be available as `defmt`, and has the same rules and caveats as `#[derive(defmt::Format)]`.
 
 ```rust
 use bitfield_struct::bitfield;
@@ -408,4 +407,17 @@ use bitfield_struct::bitfield;
 struct DefmtExample {
     data: u64
 }
-````
+```
+
+### Conditionally Enable `Debug`/`Default`/`defmt::Format`
+
+Instead of booleans, you can specify `cfg(...)` attributes for `debug`, `default` and `defmt`:
+
+```rust
+use bitfield_struct::bitfield;
+
+#[bitfield(u64, debug = cfg(test), default = cfg(feature = "foo"))]
+struct CustomDebug {
+    data: u64
+}
+```
