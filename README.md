@@ -177,8 +177,6 @@ Each accessor also inherits the documentation of its field.
 The signatures for `int` are:
 
 ```rust
-use std::fmt::{Debug, Formatter, Result};
-
 // generated struct
 struct MyBitfield(u64);
 impl MyBitfield {
@@ -187,9 +185,13 @@ impl MyBitfield {
     const INT_BITS: usize = 16;
     const INT_OFFSET: usize = 0;
 
-    const fn with_int(self, value: u16) -> Self { todo!() }
     const fn int(&self) -> u16 { todo!() }
+
+    const fn with_int(self, value: u16) -> Self { todo!() }
+    const fn with_int_checked(self, value: u16) -> Result<Self, ()> { todo!() }
+
     fn set_int(&mut self, value: u16) { todo!() }
+    fn set_int_checked(&mut self, value: u16) -> Result<(), ()> { todo!() }
 
     // other field ...
 }
@@ -409,9 +411,9 @@ struct DefmtExample {
 }
 ```
 
-### Conditionally Enable `Debug`/`Default`/`defmt::Format`
+### Conditionally Enable `new`/`Debug`/`Default`/`defmt::Format`
 
-Instead of booleans, you can specify `cfg(...)` attributes for `debug`, `default` and `defmt`:
+Instead of booleans, you can specify `cfg(...)` attributes for `new`, `debug`, `default` and `defmt`:
 
 ```rust
 use bitfield_struct::bitfield;

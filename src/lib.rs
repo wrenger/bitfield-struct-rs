@@ -27,11 +27,16 @@ fn s_err(span: proc_macro2::Span, msg: impl fmt::Display) -> syn::Error {
 /// - `repr` specifies the bitfield's representation in memory
 /// - `from` to specify a conversion function from repr to the bitfield's integer type
 /// - `into` to specify a conversion function from the bitfield's integer type to repr
+/// - `new` to disable the `new` function generation
 /// - `debug` to disable the `Debug` trait generation
 /// - `defmt` to enable the `defmt::Format` trait generation.
 /// - `default` to disable the `Default` trait generation
 /// - `order` to specify the bit order (Lsb, Msb)
 /// - `conversion` to disable the generation of `into_bits` and `from_bits`
+///
+/// > For `new`, `debug`, `defmt` or `default`, you can either use booleans
+/// (`#[bitfield(u8, debug = false)]`) or cfg attributes
+/// (`#[bitfield(u8, debug = cfg(test))]`) to enable/disable them.
 ///
 /// Parameters of the `bits` attribute (for fields):
 /// - the number of bits
@@ -55,6 +60,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         into,
         from,
         bits,
+        new,
         debug,
         defmt,
         default,
@@ -114,7 +120,20 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         impl_debug.extend(implement_defmt(&name, &members, cfg));
     }
 
-    let defaults = members.iter().map(Member::default);
+    let defaults = members.iter().map(Member::default).collect::<Vec<_>>();
+
+    let impl_new = new.cfg().map(|cfg| {
+        let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
+        quote! {
+            /// Creates a new default initialized bitfield.
+            #attr
+            #vis const fn new() -> Self {
+                let mut this = Self(#from(0));
+                #( #defaults )*
+                this
+            }
+        }
+    });
 
     let impl_default = default.cfg().map(|cfg| {
         let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
@@ -122,7 +141,9 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             #attr
             impl Default for #name {
                 fn default() -> Self {
-                    Self::new()
+                    let mut this = Self(#from(0));
+                    #( #defaults )*
+                    this
                 }
             }
         }
@@ -148,12 +169,8 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         #vis struct #name(#repr);
 
         impl #name {
-            /// Creates a new default initialized bitfield.
-            #vis const fn new() -> Self {
-                let mut this = Self(#from(0));
-                #( #defaults )*
-                this
-            }
+            #impl_new
+
             #conversion
 
             #( #members )*
@@ -814,6 +831,7 @@ struct Params {
     into: Option<syn::Path>,
     from: Option<syn::Path>,
     bits: usize,
+    new: Enable,
     debug: Enable,
     defmt: Enable,
     default: Enable,
@@ -837,6 +855,7 @@ impl Parse for Params {
             into: None,
             from: None,
             bits,
+            new: Enable::Yes,
             debug: Enable::Yes,
             defmt: Enable::No,
             default: Enable::Yes,
@@ -863,6 +882,9 @@ impl Parse for Params {
                 }
                 "defmt" => {
                     ret.defmt = input.parse()?;
+                }
+                "new" => {
+                    ret.new = input.parse()?;
                 }
                 "default" => {
                     ret.default = input.parse()?;
