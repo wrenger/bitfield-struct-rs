@@ -31,7 +31,7 @@ fn s_err(span: proc_macro2::Span, msg: impl fmt::Display) -> syn::Error {
 /// - `defmt` to enable the `defmt::Format` trait generation.
 /// - `default` to disable the `Default` trait generation
 /// - `order` to specify the bit order (Lsb, Msb)
-/// - `conversion` to disable the generation of into_bits and from_bits
+/// - `conversion` to disable the generation of `into_bits` and `from_bits`
 ///
 /// Parameters of the `bits` attribute (for fields):
 /// - the number of bits
@@ -177,7 +177,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 }
 
 fn implement_debug(name: &syn::Ident, members: &[Member], cfg: Option<TokenStream>) -> TokenStream {
-    let fields = members.iter().flat_map(|m| {
+    let fields = members.iter().filter_map(|m| {
         let inner = m.inner.as_ref()?;
         if inner.from.is_empty() {
             return None;
@@ -203,7 +203,7 @@ fn implement_debug(name: &syn::Ident, members: &[Member], cfg: Option<TokenStrea
 
 fn implement_defmt(name: &syn::Ident, members: &[Member], cfg: Option<TokenStream>) -> TokenStream {
     // build a part of the format string for each field
-    let formats = members.iter().flat_map(|m| {
+    let formats = members.iter().filter_map(|m| {
         let inner = m.inner.as_ref()?;
         if inner.from.is_empty() {
             return None;
@@ -232,7 +232,7 @@ fn implement_defmt(name: &syn::Ident, members: &[Member], cfg: Option<TokenStrea
     });
 
     // find the corresponding format argument for each field
-    let args = members.iter().flat_map(|m| {
+    let args = members.iter().filter_map(|m| {
         let inner = m.inner.as_ref()?;
         if inner.from.is_empty() {
             return None;
@@ -437,7 +437,9 @@ impl ToTokens for Member {
         );
 
         let with_ident = format_ident!("with_{}", ident);
+        let with_ident_checked = format_ident!("with_{}_checked", ident);
         let set_ident = format_ident!("set_{}", ident);
+        let set_ident_checked = format_ident!("set_{}_checked", ident);
         let bits_ident = format_ident!("{}_BITS", ident_upper);
         let offset_ident = format_ident!("{}_OFFSET", ident_upper);
 
@@ -470,22 +472,37 @@ impl ToTokens for Member {
             tokens.extend(quote! {
                 #doc
                 #[doc = #location]
-                #[cfg_attr(debug_assertions, track_caller)]
-                #vis const fn #with_ident(self, value: #ty) -> Self {
+                #vis const fn #with_ident_checked(self, value: #ty) -> core::result::Result<Self, ()> {
                     let this = value;
                     let value: #base_ty = #into;
                     let mask = #base_ty::MAX >> (#base_ty::BITS - Self::#bits_ident as u32);
                     #[allow(unused_comparisons)]
-                    debug_assert!(value <= mask, "value out of bounds");
+                    if value > mask {
+                        return Err(());
+                    }
                     let bits = #repr_into(self.0) & !(mask << Self::#offset_ident) | (value & mask) << Self::#offset_ident;
-                    Self(#repr_from(bits))
+                    Ok(Self(#repr_from(bits)))
+                }
+                #doc
+                #[doc = #location]
+                #[cfg_attr(debug_assertions, track_caller)]
+                #vis const fn #with_ident(self, value: #ty) -> Self {
+                    match self.#with_ident_checked(value) {
+                        Ok(s) => s,
+                        Err(_) => panic!("value out of bounds"),
+                    }
                 }
 
                 #doc
                 #[doc = #location]
-                #[cfg_attr(debug_assertions, track_caller)]
                 #vis fn #set_ident(&mut self, value: #ty) {
                     *self = self.#with_ident(value);
+                }
+                #doc
+                #[doc = #location]
+                #vis fn #set_ident_checked(&mut self, value: #ty) -> core::result::Result<(), ()> {
+                    *self = self.#with_ident_checked(value)?;
+                    Ok(())
                 }
             });
         }
@@ -536,7 +553,7 @@ fn parse_field(
     };
 
     // Defaults for the different types
-    let (class, ty_bits) = type_bits(ty);
+    let (class, ty_bits) = type_info(ty);
     let mut ret = match class {
         TypeClass::Bool => Field {
             bits: ty_bits,
@@ -648,10 +665,10 @@ fn parse_field(
         if ret.into.is_empty() {
             // Bounds check and remove leading ones from negative values
             ret.into = quote! {{
-                debug_assert!({
-                    let m = #ty::MIN >> (#ty::BITS - #bits);
-                    m <= this && this <= -(m + 1)
-                });
+                let m = #ty::MIN >> (#ty::BITS - #bits);
+                if !(m <= this && this <= -(m + 1)) {
+                    return Err(())
+                }
                 let mask = #base_ty::MAX >> (#base_ty::BITS - #bits);
                 (this as #base_ty & mask)
             }};
@@ -809,7 +826,7 @@ impl Parse for Params {
         let Ok(ty) = syn::Type::parse(input) else {
             return Err(s_err(input.span(), "unknown type"));
         };
-        let (class, bits) = type_bits(&ty);
+        let (class, bits) = type_info(&ty);
         if class != TypeClass::UInt {
             return Err(s_err(input.span(), "unsupported type"));
         }
@@ -876,7 +893,7 @@ impl Parse for Params {
 }
 
 /// Returns the number of bits for a given type
-fn type_bits(ty: &syn::Type) -> (TypeClass, usize) {
+fn type_info(ty: &syn::Type) -> (TypeClass, usize) {
     let syn::Type::Path(syn::TypePath { path, .. }) = ty else {
         return (TypeClass::Other, 0);
     };
@@ -903,6 +920,7 @@ fn type_bits(ty: &syn::Type) -> (TypeClass, usize) {
 
 #[cfg(test)]
 mod test {
+    #![allow(clippy::unwrap_used)]
     use quote::quote;
 
     use crate::{Access, BitsAttr, Enable, Order, Params};

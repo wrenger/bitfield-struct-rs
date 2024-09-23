@@ -314,6 +314,20 @@ fn negative_neg_overflow() {
 }
 
 #[test]
+fn checked_overflow() {
+    #[bitfield(u32)]
+    struct MyBitfield {
+        #[bits(3)]
+        negative: i32,
+        #[bits(29)]
+        __: (),
+    }
+
+    assert!(MyBitfield::new().with_negative_checked(4).is_err());
+    assert!(MyBitfield::new().with_negative_checked(-5).is_err());
+}
+
+#[test]
 fn negative_signed() {
     #[bitfield(u64)]
     struct MyBitfield {
