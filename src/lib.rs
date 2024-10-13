@@ -418,9 +418,17 @@ impl Member {
                 return quote!(this = this.#with_ident(#default););
             }
         }
+
+        // fallback when there is no setter
         let offset = self.offset;
         let base_ty = &self.base_ty;
-        quote!(this.0 |= (#default as #base_ty) << #offset;)
+        let repr_into = &self.repr_into;
+        let repr_from = &self.repr_from;
+        let bits = self.bits as u32;
+        quote!{
+            let mask = #base_ty::MAX >> (#base_ty::BITS - #bits);
+            this.0 = #repr_from(#repr_into(this.0) | (((#default as #base_ty) & mask) << #offset));
+        }
     }
 }
 

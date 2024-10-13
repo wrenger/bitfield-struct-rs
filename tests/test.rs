@@ -551,3 +551,17 @@ fn custom_inner() {
     assert_eq!(my_bitfield, MyBitfield::from_bits(CustomInner(0)));
     assert_eq!(my_bitfield.into_bits(), CustomInner(0));
 }
+
+#[test]
+fn default_without_setter() {
+    use endian_num::le16;
+
+    #[bitfield(u16, repr = le16, from = le16::from_ne, into = le16::to_ne)]
+    struct Test {
+        #[bits(14)]
+        f3: u16,
+        _reserved: bool,  // no setter
+        #[bits(1, access = RO)]  // no setter
+        reserved: bool
+    }
+}
