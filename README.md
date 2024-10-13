@@ -371,7 +371,7 @@ assert_eq!(my_be_bitfield.into_bits().to_be_bytes(), [0x23, 0x41]);
 
 ## Automatic Trait Implementations
 
-This macro automatically creates a suitable `fmt::Debug` and `Default` implementations similar to the ones created for normal structs by `#[derive(Debug, Default)]`.
+Besides implementing `Clone` and `Copy`, this macro automatically creates a suitable `fmt::Debug` and `Default` implementations similar to the ones created for normal structs by `#[derive(Debug, Default)]`.
 You can disable this with the extra `debug` and `default` arguments.
 
 ```rust
