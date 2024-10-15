@@ -35,8 +35,8 @@ fn s_err(span: proc_macro2::Span, msg: impl fmt::Display) -> syn::Error {
 /// - `conversion` to disable the generation of `into_bits` and `from_bits`
 ///
 /// > For `new`, `debug`, `defmt` or `default`, you can either use booleans
-/// (`#[bitfield(u8, debug = false)]`) or cfg attributes
-/// (`#[bitfield(u8, debug = cfg(test))]`) to enable/disable them.
+/// > (`#[bitfield(u8, debug = false)]`) or cfg attributes
+/// > (`#[bitfield(u8, debug = cfg(test))]`) to enable/disable them.
 ///
 /// Parameters of the `bits` attribute (for fields):
 /// - the number of bits
@@ -127,6 +127,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         quote! {
             /// Creates a new default initialized bitfield.
             #attr
+            #[allow(clippy::assign_op_pattern)]
             #vis const fn new() -> Self {
                 let mut this = Self(#from(0));
                 #( #defaults )*
@@ -140,6 +141,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         quote! {
             #attr
             impl Default for #name {
+                #[allow(clippy::assign_op_pattern)]
                 fn default() -> Self {
                     let mut this = Self(#from(0));
                     #( #defaults )*
