@@ -295,6 +295,7 @@ struct Member {
     repr_into: Option<syn::Path>,
     repr_from: Option<syn::Path>,
     default: TokenStream,
+    order: Order,
     inner: Option<MemberInner>,
 }
 
@@ -384,6 +385,7 @@ impl Member {
                 repr_into,
                 repr_from,
                 default,
+                order,
                 inner: Some(MemberInner {
                     ident,
                     ty,
@@ -405,6 +407,7 @@ impl Member {
                 repr_into,
                 repr_from,
                 default,
+                order,
                 inner: None,
             })
         }
@@ -443,6 +446,7 @@ impl ToTokens for Member {
             repr_into,
             repr_from,
             default: _,
+            order: _,
             inner:
                 Some(MemberInner {
                     ident,
