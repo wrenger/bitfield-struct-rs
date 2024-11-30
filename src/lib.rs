@@ -79,16 +79,25 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
     let mut offset = 0;
     let mut members = Vec::with_capacity(fields.named.len());
+    let mut non_padding_field_bits_and_offsets: Vec<(u8, u8)> = Vec::new();
     for field in fields.named {
         let f = Member::new(
             ty.clone(),
             bits,
             into.clone(),
             from.clone(),
-            field,
+            field.clone(),
             offset,
             order,
         )?;
+
+        // Collect the bit and offsets of non-padding fields
+        let field_ident = field.ident.clone().unwrap();
+        let padding_field = field_ident.to_string().starts_with('_');
+        if !padding_field {
+            non_padding_field_bits_and_offsets.push((f.bits as u8, f.offset as u8));
+        }
+
         offset += f.bits;
         members.push(f);
     }
@@ -151,11 +160,33 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         }
     });
 
+    let extract_non_padding_field_bits_tokens =
+        non_padding_field_bits_and_offsets
+            .iter()
+            .map(|(width, offset)| {
+                let width = *width;
+                let offset = *offset;
+
+                quote! {
+                    let field_bits = ((1usize << #width as usize) - 1) as #ty;
+                    let mask = (field_bits as #ty) << #offset as #ty;
+                    let masked_bits = #into(bits) & mask;
+                    res = (res & !mask) | masked_bits;
+                }
+            });
+
     let conversion = conversion.then(|| {
         quote! {
             /// Convert from bits.
             #vis const fn from_bits(bits: #repr) -> Self {
                 Self(bits)
+            }
+            /// Convert from bits while respecting the default values.
+            #vis const fn from_bits_with_defaults(bits: #repr) -> Self {
+                let self_with_defaults = Self::new();
+                let mut res = #into(self_with_defaults.0);
+                #( #extract_non_padding_field_bits_tokens )*
+                Self(#from(res))
             }
             /// Convert into bits.
             #vis const fn into_bits(self) -> #repr {
