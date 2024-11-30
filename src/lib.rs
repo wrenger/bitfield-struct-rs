@@ -32,7 +32,7 @@ fn s_err(span: proc_macro2::Span, msg: impl fmt::Display) -> syn::Error {
 /// - `defmt` to enable the `defmt::Format` trait generation.
 /// - `default` to disable the `Default` trait generation
 /// - `order` to specify the bit order (Lsb, Msb)
-/// - `conversion` to disable the generation of `into_bits` and `from_bits`
+/// - `conversion` to disable the generation of `into_bits`, `from_bits`, and `from_bits_with_defaults`
 ///
 /// > For `new`, `debug`, `defmt` or `default`, you can either use booleans
 /// > (`#[bitfield(u8, debug = false)]`) or cfg attributes
