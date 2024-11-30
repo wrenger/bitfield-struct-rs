@@ -565,3 +565,20 @@ fn default_without_setter() {
         reserved: bool
     }
 }
+
+#[test]
+fn from_bits_with_defaults() {
+    #[bitfield(u32)]
+    struct MyBitfield {
+        #[bits(16, default = 0)]
+        _reserved: u32,
+        #[bits(16, default = 0xFFFF)]
+        data: u32,
+    }
+    let from_bits_val = MyBitfield::from_bits(0xffff_ffff);
+    let from_bits_raw: u32 = from_bits_val.into();
+    assert_eq!(from_bits_raw, 0xffff_ffff);
+    let from_bits_with_defaults_val = MyBitfield::from_bits_with_defaults(0xffff_ffff);
+    let from_bits_raw: u32 = from_bits_with_defaults_val.into();
+    assert_eq!(from_bits_raw, 0xffff_0000);
+}
