@@ -536,6 +536,10 @@ impl ToTokens for Member {
     }
 }
 
+impl ToTokens for Order {
+    fn to_tokens(&self, _tokens: &mut TokenStream) {}
+}
+
 /// Distinguish between different types for code generation.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum TypeClass {
