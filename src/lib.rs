@@ -342,6 +342,13 @@ impl Member {
 
         let ignore = ignore || access == Access::None;
 
+        // compute the offset
+        let offset = if order == Order::Lsb {
+            offset
+        } else {
+            base_bits - offset - bits
+        };
+
         if bits > 0 && !ignore {
             // overflow check
             if offset + bits > base_bits {
@@ -357,13 +364,6 @@ impl Member {
                 Access::ReadOnly => (from, quote!()),
                 Access::WriteOnly => (quote!(), into),
                 Access::None => (quote!(), quote!()),
-            };
-
-            // compute the offset
-            let offset = if order == Order::Lsb {
-                offset
-            } else {
-                base_bits - offset - bits
             };
 
             // auto-conversion from zero
@@ -432,20 +432,9 @@ impl Member {
         let bits = self.bits as u32;
         let order = self.order;
 
-        match order {
-            Order::Lsb => {
-                quote! {
-                    let mask = #base_ty::MAX >> (#base_ty::BITS - #bits);
-                    this.0 = #repr_from(#repr_into(this.0) | (((#default as #base_ty) & mask) << #offset));
-                }
-            }
-            Order::Msb => {
-                quote! {
-                    let mask = #base_ty::MAX >> (#base_ty::BITS - #bits);
-                    let offset = (#base_ty::BITS as #base_ty - #bits as #base_ty) - #offset as #base_ty;
-                    this.0 = #repr_from(#repr_into(this.0) | (((#default as #base_ty) & mask) << offset));
-                }
-            }
+        quote! {
+            let mask = #base_ty::MAX >> (#base_ty::BITS - #bits);
+            this.0 = #repr_from(#repr_into(this.0) | (((#default as #base_ty) & mask) << #offset));
         }
     }
 }
