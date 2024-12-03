@@ -565,3 +565,31 @@ fn default_without_setter() {
         reserved: bool
     }
 }
+
+#[test]
+fn default_msb_padding_default_value() {
+    #[bitfield(u8, order = Msb)]
+    struct MyMsbByte {
+        #[bits(4, default = 0b1111)]
+        __padding: usize,
+        #[bits(4, default = 0b1010)]
+        kind: usize,
+    }
+    let my_byte_msb = MyMsbByte::new();
+    let val: u8 = my_byte_msb.into();
+    assert_eq!(val, 0b1111_1010);
+}
+
+#[test]
+fn default_lsb_padding_default_value() {
+    #[bitfield(u8, order = Lsb)]
+    struct MyMsbByte {
+        #[bits(4, default = 0b1111)]
+        __padding: usize,
+        #[bits(4, default = 0b1010)]
+        kind: usize,
+    }
+    let my_byte_msb = MyMsbByte::new();
+    let val: u8 = my_byte_msb.into();
+    assert_eq!(val, 0b1010_1111);
+}
