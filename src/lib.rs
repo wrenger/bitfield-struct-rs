@@ -295,7 +295,6 @@ struct Member {
     repr_into: Option<syn::Path>,
     repr_from: Option<syn::Path>,
     default: TokenStream,
-    order: Order,
     inner: Option<MemberInner>,
 }
 
@@ -385,7 +384,6 @@ impl Member {
                 repr_into,
                 repr_from,
                 default,
-                order,
                 inner: Some(MemberInner {
                     ident,
                     ty,
@@ -407,7 +405,6 @@ impl Member {
                 repr_into,
                 repr_from,
                 default,
-                order,
                 inner: None,
             })
         }
@@ -430,7 +427,6 @@ impl Member {
         let repr_into = &self.repr_into;
         let repr_from = &self.repr_from;
         let bits = self.bits as u32;
-        let order = self.order;
 
         quote! {
             let mask = #base_ty::MAX >> (#base_ty::BITS - #bits);
@@ -448,7 +444,6 @@ impl ToTokens for Member {
             repr_into,
             repr_from,
             default: _,
-            order: _,
             inner:
                 Some(MemberInner {
                     ident,
