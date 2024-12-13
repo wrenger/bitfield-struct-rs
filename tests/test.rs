@@ -116,6 +116,42 @@ fn attrs() {
 }
 
 #[test]
+fn clone() {
+    /// We have a custom clone implementation -> opt out
+    #[bitfield(u64, clone = false)]
+    struct Full {
+        data: u64,
+    }
+
+    impl Clone for Full {
+        fn clone(&self) -> Self {
+            Self::new().with_data(self.data())
+        }
+    }
+
+    impl Copy for Full {}
+
+    let full = Full::new().with_data(123);
+    let full_copy = full;
+    assert_eq!(full.data(), full_copy.data());
+    assert_eq!(full.data(), full.clone().data());
+}
+
+#[test]
+fn clone_cfg() {
+    /// We opt in for clone/copy implementation, via a cfg.
+    #[bitfield(u64, clone = cfg(test))]
+    struct Full {
+        data: u64,
+    }
+
+    let full = Full::new().with_data(123);
+    let full_copy = full;
+    assert_eq!(full.data(), full_copy.data());
+    assert_eq!(full.data(), full.clone().data());
+}
+
+#[test]
 fn debug() {
     /// We have a custom debug implementation -> opt out
     #[bitfield(u64, debug = false)]

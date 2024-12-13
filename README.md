@@ -371,7 +371,31 @@ assert_eq!(my_be_bitfield.into_bits().to_be_bytes(), [0x23, 0x41]);
 
 ## Automatic Trait Implementations
 
-Besides implementing `Clone` and `Copy`, this macro automatically creates a suitable `fmt::Debug` and `Default` implementations similar to the ones created for normal structs by `#[derive(Debug, Default)]`.
+### `Clone`, `Copy`
+By default, this macro derives `Clone` and `Copy`.
+You can disable this with the extra `clone` argument if the semantics of cloning your type require it (e.g. the type holds a pointer to owned data that must also be cloned).
+In this case, you can provide your own implementations for `Clone` and `Copy`.
+
+```rust
+use bitfield_struct::bitfield;
+
+#[bitfield(u64, clone = false)]
+struct CustomClone {
+    data: u64
+}
+
+impl Clone for CustomClone {
+    fn clone(&self) -> Self {
+        Self::new().with_data(self.data())
+    }
+}
+
+// optionally:
+impl Copy for CustomClone {}
+```
+
+### `fmt::Debug`, `Default`
+By default, it also generates suitable `fmt::Debug` and `Default` implementations similar to the ones created for normal structs by `#[derive(Debug, Default)]`.
 You can disable this with the extra `debug` and `default` arguments.
 
 ```rust
@@ -411,9 +435,9 @@ struct DefmtExample {
 }
 ```
 
-### Conditionally Enable `new`/`Debug`/`Default`/`defmt::Format`
+### Conditionally Enable `new`/`Clone`/`Debug`/`Default`/`defmt::Format`
 
-Instead of booleans, you can specify `cfg(...)` attributes for `new`, `debug`, `default` and `defmt`:
+Instead of booleans, you can specify `cfg(...)` attributes for `new`, `clone`, `debug`, `default` and `defmt`:
 
 ```rust
 use bitfield_struct::bitfield;
