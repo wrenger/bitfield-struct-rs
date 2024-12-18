@@ -28,13 +28,14 @@ fn s_err(span: proc_macro2::Span, msg: impl fmt::Display) -> syn::Error {
 /// - `from` to specify a conversion function from repr to the bitfield's integer type
 /// - `into` to specify a conversion function from the bitfield's integer type to repr
 /// - `new` to disable the `new` function generation
+/// - `clone` to disable the `Clone` trait generation
 /// - `debug` to disable the `Debug` trait generation
-/// - `defmt` to enable the `defmt::Format` trait generation.
+/// - `defmt` to enable the `defmt::Format` trait generation
 /// - `default` to disable the `Default` trait generation
 /// - `order` to specify the bit order (Lsb, Msb)
 /// - `conversion` to disable the generation of `into_bits` and `from_bits`
 ///
-/// > For `new`, `debug`, `defmt` or `default`, you can either use booleans
+/// > For `new`, `clone`, `debug`, `defmt` or `default`, you can either use booleans
 /// > (`#[bitfield(u8, debug = false)]`) or cfg attributes
 /// > (`#[bitfield(u8, debug = cfg(test))]`) to enable/disable them.
 ///
@@ -61,6 +62,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         from,
         bits,
         new,
+        clone,
         debug,
         defmt,
         default,
@@ -72,6 +74,11 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let name = input.ident;
     let vis = input.vis;
     let attrs: TokenStream = input.attrs.iter().map(ToTokens::to_token_stream).collect();
+    let derive = match clone {
+        Enable::No => None,
+        Enable::Yes => Some(quote! { #[derive(Copy, Clone)] }),
+        Enable::Cfg(cfg) => Some(quote! { #[cfg_attr(#cfg, derive(Copy, Clone))] }),
+    };
 
     let syn::Fields::Named(fields) = input.fields else {
         return Err(s_err(span, "only named fields are supported"));
@@ -166,7 +173,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
     Ok(quote! {
         #attrs
-        #[derive(Copy, Clone)]
+        #derive
         #[repr(transparent)]
         #vis struct #name(#repr);
 
@@ -843,6 +850,7 @@ struct Params {
     from: Option<syn::Path>,
     bits: usize,
     new: Enable,
+    clone: Enable,
     debug: Enable,
     defmt: Enable,
     default: Enable,
@@ -867,6 +875,7 @@ impl Parse for Params {
             from: None,
             bits,
             new: Enable::Yes,
+            clone: Enable::Yes,
             debug: Enable::Yes,
             defmt: Enable::No,
             default: Enable::Yes,
@@ -896,6 +905,9 @@ impl Parse for Params {
                 }
                 "new" => {
                     ret.new = input.parse()?;
+                }
+                "clone" => {
+                    ret.clone = input.parse()?;
                 }
                 "default" => {
                     ret.default = input.parse()?;
