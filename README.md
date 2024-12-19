@@ -21,7 +21,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-bitfield-struct = "0.9"
+bitfield-struct = "0.10"
 ```
 
 ## Basics
@@ -190,8 +190,8 @@ impl MyBitfield {
     const fn with_int(self, value: u16) -> Self { todo!() }
     const fn with_int_checked(self, value: u16) -> Result<Self, ()> { todo!() }
 
-    fn set_int(&mut self, value: u16) { todo!() }
-    fn set_int_checked(&mut self, value: u16) -> Result<(), ()> { todo!() }
+    const fn set_int(&mut self, value: u16) { todo!() }
+    const fn set_int_checked(&mut self, value: u16) -> Result<(), ()> { todo!() }
 
     // other field ...
 }
