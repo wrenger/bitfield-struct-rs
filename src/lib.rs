@@ -504,7 +504,7 @@ impl ToTokens for Member {
         }
 
         if !into.is_empty() {
-            let (class, _) = type_info(&ty);
+            let (class, _) = type_info(ty);
             // generate static strings for the error messages (due to const)
             let bounds = if class == TypeClass::SInt {
                 let min = -((u128::MAX >> (128 - (bits - 1))) as i128) - 1;
@@ -518,7 +518,30 @@ impl ToTokens for Member {
             tokens.extend(quote! {
                 #doc
                 #[doc = #location]
-                #vis const fn #with_ident_checked(self, value: #ty) -> core::result::Result<Self, ()> {
+                #vis const fn #with_ident_checked(mut self, value: #ty) -> core::result::Result<Self, ()> {
+                    match self.#set_ident_checked(value) {
+                        Ok(_) => Ok(self),
+                        Err(_) => Err(()),
+                    }
+                }
+                #doc
+                #[doc = #location]
+                #[cfg_attr(debug_assertions, track_caller)]
+                #vis const fn #with_ident(mut self, value: #ty) -> Self {
+                    self.#set_ident(value);
+                    self
+                }
+
+                #doc
+                #[doc = #location]
+                #vis const fn #set_ident(&mut self, value: #ty) {
+                    if let Err(_) = self.#set_ident_checked(value) {
+                        panic!(#bounds_error)
+                    }
+                }
+                #doc
+                #[doc = #location]
+                #vis const fn #set_ident_checked(&mut self, value: #ty) -> core::result::Result<(), ()> {
                     let this = value;
                     let value: #base_ty = #into;
                     let mask = #base_ty::MAX >> (#base_ty::BITS - Self::#bits_ident as u32);
@@ -527,27 +550,7 @@ impl ToTokens for Member {
                         return Err(());
                     }
                     let bits = #repr_into(self.0) & !(mask << Self::#offset_ident) | (value & mask) << Self::#offset_ident;
-                    Ok(Self(#repr_from(bits)))
-                }
-                #doc
-                #[doc = #location]
-                #[cfg_attr(debug_assertions, track_caller)]
-                #vis const fn #with_ident(self, value: #ty) -> Self {
-                    match self.#with_ident_checked(value) {
-                        Ok(s) => s,
-                        Err(_) => panic!(#bounds_error),
-                    }
-                }
-
-                #doc
-                #[doc = #location]
-                #vis fn #set_ident(&mut self, value: #ty) {
-                    *self = self.#with_ident(value);
-                }
-                #doc
-                #[doc = #location]
-                #vis fn #set_ident_checked(&mut self, value: #ty) -> core::result::Result<(), ()> {
-                    *self = self.#with_ident_checked(value)?;
+                    self.0 = #repr_from(bits);
                     Ok(())
                 }
             });

@@ -10,7 +10,7 @@ repository = "https://github.com/wrenger/bitfield-struct-rs.git"
 documentation = "https://docs.rs/bitfield-struct"
 readme = "README.md"
 license = "MIT"
-rust-version = "1.65.0"
+rust-version = "1.83.0"
 
 [lib]
 proc-macro = true
