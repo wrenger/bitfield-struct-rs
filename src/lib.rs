@@ -104,8 +104,8 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         return Err(s_err(
             span,
             format!(
-                "The bitfield size ({bits} bits) has to be equal to the sum of its members ({offset} bits)!. \
-                You might have to add padding (a {} bits large member prefixed with \"_\").",
+                "The bitfield size ({bits} bits) has to be equal to the sum of its fields ({offset} bits). \
+                You might have to add padding (a {} bits large field prefixed with \"_\").",
                 bits - offset
             ),
         ));
@@ -114,7 +114,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         return Err(s_err(
             span,
             format!(
-                "The size of the members ({offset} bits) is larger than the type ({bits} bits)!."
+                "The size of the fields ({offset} bits) is larger than the type ({bits} bits)."
             ),
         ));
     }
@@ -504,6 +504,17 @@ impl ToTokens for Member {
         }
 
         if !into.is_empty() {
+            let (class, _) = type_info(&ty);
+            // generate static strings for the error messages (due to const)
+            let bounds = if class == TypeClass::SInt {
+                let min = -((u128::MAX >> (128 - (bits - 1))) as i128) - 1;
+                let max = u128::MAX >> (128 - (bits - 1));
+                format!("[{}, {}]", min, max)
+            } else {
+                format!("[0, {}]", u128::MAX >> (128 - bits))
+            };
+            let bounds_error = format!("value out of bounds {bounds}");
+
             tokens.extend(quote! {
                 #doc
                 #[doc = #location]
@@ -524,7 +535,7 @@ impl ToTokens for Member {
                 #vis const fn #with_ident(self, value: #ty) -> Self {
                     match self.#with_ident_checked(value) {
                         Ok(s) => s,
-                        Err(_) => panic!("value out of bounds"),
+                        Err(_) => panic!(#bounds_error),
                     }
                 }
 
