@@ -134,7 +134,6 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         quote! {
             /// Creates a new default initialized bitfield.
             #attr
-            #[allow(clippy::assign_op_pattern)]
             #vis const fn new() -> Self {
                 let mut this = Self(#from(0));
                 #( #defaults )*
@@ -148,7 +147,6 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         quote! {
             #attr
             impl Default for #name {
-                #[allow(clippy::assign_op_pattern)]
                 fn default() -> Self {
                     let mut this = Self(#from(0));
                     #( #defaults )*
@@ -177,6 +175,9 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         #[repr(transparent)]
         #vis struct #name(#repr);
 
+        #[allow(unused_comparisons)]
+        #[allow(clippy::unnecessary_cast)]
+        #[allow(clippy::assign_op_pattern)]
         impl #name {
             #impl_new
 
@@ -185,6 +186,9 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
             #( #members )*
         }
 
+        #[allow(unused_comparisons)]
+        #[allow(clippy::unnecessary_cast)]
+        #[allow(clippy::assign_op_pattern)]
         #impl_default
 
         impl From<#repr> for #name {
@@ -545,7 +549,6 @@ impl ToTokens for Member {
                     let this = value;
                     let value: #base_ty = #into;
                     let mask = #base_ty::MAX >> (#base_ty::BITS - Self::#bits_ident as u32);
-                    #[allow(unused_comparisons)]
                     if value > mask {
                         return Err(());
                     }
