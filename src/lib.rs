@@ -6,9 +6,11 @@ use proc_macro as pc;
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote, ToTokens};
 use std::{fmt, stringify};
-use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::Token;
+
+mod attr;
+use attr::*;
+mod traits;
 
 fn s_err(span: proc_macro2::Span, msg: impl fmt::Display) -> syn::Error {
     syn::Error::new(span, msg)
@@ -32,6 +34,7 @@ fn s_err(span: proc_macro2::Span, msg: impl fmt::Display) -> syn::Error {
 /// - `debug` to disable the `Debug` trait generation
 /// - `defmt` to enable the `defmt::Format` trait generation
 /// - `default` to disable the `Default` trait generation
+/// - `hash` to generate the `Hash` trait
 /// - `order` to specify the bit order (Lsb, Msb)
 /// - `conversion` to disable the generation of `into_bits` and `from_bits`
 ///
@@ -66,6 +69,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         debug,
         defmt,
         default,
+        hash,
         order,
         conversion,
     } = syn::parse2(args)?;
@@ -121,10 +125,13 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
     let mut impl_debug = TokenStream::new();
     if let Some(cfg) = debug.cfg() {
-        impl_debug.extend(implement_debug(&name, &members, cfg));
+        impl_debug.extend(traits::debug(&name, &members, cfg));
     }
     if let Some(cfg) = defmt.cfg() {
-        impl_debug.extend(implement_defmt(&name, &members, cfg));
+        impl_debug.extend(traits::defmt(&name, &members, cfg));
+    }
+    if let Some(cfg) = hash.cfg() {
+        impl_debug.extend(traits::hash(&name, &members, cfg));
     }
 
     let defaults = members.iter().map(Member::default).collect::<Vec<_>>();
@@ -206,98 +213,6 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     })
 }
 
-fn implement_debug(name: &syn::Ident, members: &[Member], cfg: Option<TokenStream>) -> TokenStream {
-    let fields = members.iter().filter_map(|m| {
-        let inner = m.inner.as_ref()?;
-        if inner.from.is_empty() {
-            return None;
-        }
-
-        let ident = &inner.ident;
-        Some(quote!(.field(stringify!(#ident), &self.#ident())))
-    });
-
-    let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
-
-    quote! {
-        #attr
-        impl core::fmt::Debug for #name {
-            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                f.debug_struct(stringify!(#name))
-                    #( #fields )*
-                    .finish()
-            }
-        }
-    }
-}
-
-fn implement_defmt(name: &syn::Ident, members: &[Member], cfg: Option<TokenStream>) -> TokenStream {
-    // build a part of the format string for each field
-    let formats = members.iter().filter_map(|m| {
-        let inner = m.inner.as_ref()?;
-        if inner.from.is_empty() {
-            return None;
-        }
-
-        // primitives supported by defmt
-        const PRIMITIVES: &[&str] = &[
-            "bool", "usize", "isize", //
-            "u8", "u16", "u32", "u64", "u128", //
-            "i8", "i16", "i32", "i64", "i128", //
-            "f32", "f64", //
-        ];
-
-        // get the type name so we can use more efficient defmt formats
-        // if it's a primitive
-        if let syn::Type::Path(syn::TypePath { path, .. }) = &inner.ty {
-            if let Some(ident) = path.get_ident() {
-                if PRIMITIVES.iter().any(|s| ident == s) {
-                    // defmt supports this primitive, use special spec
-                    return Some(format!("{}: {{={ident}}}", inner.ident));
-                }
-            }
-        }
-
-        Some(format!("{}: {{:?}}", inner.ident))
-    });
-
-    // find the corresponding format argument for each field
-    let args = members.iter().filter_map(|m| {
-        let inner = m.inner.as_ref()?;
-        if inner.from.is_empty() {
-            return None;
-        }
-
-        let ident = &inner.ident;
-        Some(quote!(self.#ident()))
-    });
-
-    // build a string like "Foo { field_name: {:?}, ... }"
-    // four braces, two to escape *this* format, times two to escape
-    // the defmt::write! call below.
-    let format_string = format!(
-        "{name} {{{{ {} }}}} ",
-        formats.collect::<Vec<_>>().join(", ")
-    );
-
-    let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
-
-    // note: we use defmt paths here, not ::defmt, because many crates
-    // in the embedded space will rename defmt (e.g. to defmt_03) in
-    // order to support multiple incompatible defmt versions.
-    //
-    // defmt itself avoids ::defmt for this reason. For more info, see:
-    // https://github.com/knurling-rs/defmt/pull/835
-    quote! {
-        #attr
-        impl defmt::Format for #name {
-            fn format(&self, f: defmt::Formatter) {
-                defmt::write!(f, #format_string, #( #args, )*)
-            }
-        }
-    }
-}
-
 /// Represents a member where accessor functions should be generated for.
 struct Member {
     offset: usize,
@@ -324,11 +239,11 @@ impl Member {
         base_bits: usize,
         repr_into: Option<syn::Path>,
         repr_from: Option<syn::Path>,
-        f: syn::Field,
+        field: syn::Field,
         offset: usize,
         order: Order,
     ) -> syn::Result<Self> {
-        let span = f.span();
+        let span = field.span();
 
         let syn::Field {
             mut attrs,
@@ -336,7 +251,7 @@ impl Member {
             ident,
             ty,
             ..
-        } = f;
+        } = field;
 
         let ident = ident.ok_or_else(|| s_err(span, "Not supported"))?;
         let ignore = ident.to_string().starts_with('_');
@@ -737,222 +652,6 @@ fn parse_field(
     Ok(ret)
 }
 
-/// The bits attribute of the fields of a bitfield struct
-struct BitsAttr {
-    bits: Option<usize>,
-    default: Option<syn::Expr>,
-    into: Option<syn::Path>,
-    from: Option<syn::Path>,
-    access: Option<Access>,
-}
-
-impl Parse for BitsAttr {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut attr = Self {
-            bits: None,
-            default: None,
-            into: None,
-            from: None,
-            access: None,
-        };
-        if let Ok(bits) = syn::LitInt::parse(input) {
-            attr.bits = Some(bits.base10_parse()?);
-            if !input.is_empty() {
-                <Token![,]>::parse(input)?;
-            }
-        }
-        // parse remainder
-        if !input.is_empty() {
-            loop {
-                let ident = syn::Ident::parse(input)?;
-
-                <Token![=]>::parse(input)?;
-
-                if ident == "default" {
-                    attr.default = Some(input.parse()?);
-                } else if ident == "into" {
-                    attr.into = Some(input.parse()?);
-                } else if ident == "from" {
-                    attr.from = Some(input.parse()?);
-                } else if ident == "access" {
-                    attr.access = Some(input.parse()?);
-                }
-
-                if input.is_empty() {
-                    break;
-                }
-
-                <Token![,]>::parse(input)?;
-            }
-        }
-        Ok(attr)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Access {
-    ReadWrite,
-    ReadOnly,
-    WriteOnly,
-    None,
-}
-
-impl Parse for Access {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mode = input.parse::<Ident>()?;
-
-        if mode == "RW" {
-            Ok(Self::ReadWrite)
-        } else if mode == "RO" {
-            Ok(Self::ReadOnly)
-        } else if mode == "WO" {
-            Ok(Self::WriteOnly)
-        } else if mode == "None" {
-            Ok(Self::None)
-        } else {
-            Err(s_err(
-                mode.span(),
-                "Invalid access mode, only RW, RO, WO, or None are allowed",
-            ))
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Order {
-    Lsb,
-    Msb,
-}
-
-#[derive(Debug, Clone)]
-enum Enable {
-    No,
-    Yes,
-    Cfg(TokenStream),
-}
-impl Enable {
-    fn cfg(self) -> Option<Option<TokenStream>> {
-        match self {
-            Enable::No => None,
-            Enable::Yes => Some(None),
-            Enable::Cfg(c) => Some(Some(c)),
-        }
-    }
-}
-impl Parse for Enable {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        Ok(if let Ok(lit_bool) = syn::LitBool::parse(input) {
-            if lit_bool.value {
-                Enable::Yes
-            } else {
-                Enable::No
-            }
-        } else {
-            let meta = syn::MetaList::parse(input)?;
-            if matches!(meta.delimiter, syn::MacroDelimiter::Paren(_)) && meta.path.is_ident("cfg")
-            {
-                Enable::Cfg(meta.tokens)
-            } else {
-                return Err(s_err(meta.span(), "Only `cfg` attributes are allowed"));
-            }
-        })
-    }
-}
-
-/// The bitfield macro parameters
-struct Params {
-    ty: syn::Type,
-    repr: syn::Type,
-    into: Option<syn::Path>,
-    from: Option<syn::Path>,
-    bits: usize,
-    new: Enable,
-    clone: Enable,
-    debug: Enable,
-    defmt: Enable,
-    default: Enable,
-    order: Order,
-    conversion: bool,
-}
-
-impl Parse for Params {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let Ok(ty) = syn::Type::parse(input) else {
-            return Err(s_err(input.span(), "unknown type"));
-        };
-        let (class, bits) = type_info(&ty);
-        if class != TypeClass::UInt {
-            return Err(s_err(input.span(), "unsupported type"));
-        }
-
-        let mut ret = Params {
-            repr: ty.clone(),
-            ty,
-            into: None,
-            from: None,
-            bits,
-            new: Enable::Yes,
-            clone: Enable::Yes,
-            debug: Enable::Yes,
-            defmt: Enable::No,
-            default: Enable::Yes,
-            order: Order::Lsb,
-            conversion: true,
-        };
-
-        // try parse additional args
-        while <Token![,]>::parse(input).is_ok() {
-            let ident = Ident::parse(input)?;
-            <Token![=]>::parse(input)?;
-            match ident.to_string().as_str() {
-                "repr" => {
-                    ret.repr = input.parse()?;
-                }
-                "from" => {
-                    ret.from = Some(input.parse()?);
-                }
-                "into" => {
-                    ret.into = Some(input.parse()?);
-                }
-                "debug" => {
-                    ret.debug = input.parse()?;
-                }
-                "defmt" => {
-                    ret.defmt = input.parse()?;
-                }
-                "new" => {
-                    ret.new = input.parse()?;
-                }
-                "clone" => {
-                    ret.clone = input.parse()?;
-                }
-                "default" => {
-                    ret.default = input.parse()?;
-                }
-                "order" => {
-                    ret.order = match syn::Ident::parse(input)?.to_string().as_str() {
-                        "Msb" | "msb" => Order::Msb,
-                        "Lsb" | "lsb" => Order::Lsb,
-                        _ => return Err(s_err(ident.span(), "unknown value for order")),
-                    };
-                }
-                "conversion" => {
-                    ret.conversion = syn::LitBool::parse(input)?.value;
-                }
-                _ => return Err(s_err(ident.span(), "unknown argument")),
-            };
-        }
-
-        if ret.repr != ret.ty && (ret.from.is_none() || ret.into.is_none()) {
-            return Err(s_err(
-                input.span(),
-                "`repr` requires both `from` and `into`",
-            ));
-        }
-
-        Ok(ret)
-    }
-}
 
 /// Returns the number of bits for a given type
 fn type_info(ty: &syn::Type) -> (TypeClass, usize) {

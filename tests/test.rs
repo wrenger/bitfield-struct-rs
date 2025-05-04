@@ -5,7 +5,7 @@ use bitfield_struct::bitfield;
 #[test]
 fn members() {
     /// A test bitfield with documentation
-    #[bitfield(u64)]
+    #[bitfield(u64, hash = true)]
     #[derive(PartialEq, Eq)] // <- Attributes after `bitfield` are carried over
     struct MyBitfield {
         /// Defaults to 16 bits for u16
@@ -37,7 +37,7 @@ fn members() {
     }
 
     /// A custom enum
-    #[derive(Debug, PartialEq, Eq)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     #[repr(u64)]
     enum CustomEnum {
         A = 0,
@@ -596,9 +596,9 @@ fn default_without_setter() {
     struct Test {
         #[bits(14)]
         f3: u16,
-        _reserved: bool,  // no setter
-        #[bits(1, access = RO)]  // no setter
-        reserved: bool
+        _reserved: bool, // no setter
+        #[bits(1, access = RO)] // no setter
+        reserved: bool,
     }
 }
 
@@ -628,4 +628,40 @@ fn default_lsb_padding_default_value() {
     let my_byte_msb = MyMsbByte::new();
     let val: u8 = my_byte_msb.into();
     assert_eq!(val, 0b1010_1111);
+}
+
+#[test]
+fn hash() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    #[bitfield(u32, hash = true)]
+    #[derive(PartialEq, Eq)]
+    struct MyBitfield {
+        data: u16,
+        __: u8,
+        #[bits(8)]
+        extra: u8,
+    }
+
+    let mut hasher = DefaultHasher::new();
+    MyBitfield::new()
+        .with_data(0x1234)
+        .with_extra(0x56)
+        .hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let mut hasher = DefaultHasher::new();
+    MyBitfield::from_bits(0x56ee_1234).hash(&mut hasher);
+    let other_hash = hasher.finish();
+
+    assert_eq!(hash, other_hash, "Padding should not affect hash");
+
+    let mut hasher = DefaultHasher::new();
+    MyBitfield::new()
+        .with_data(0x1234)
+        .with_extra(0x57)
+        .hash(&mut hasher);
+    let other_hash = hasher.finish();
+    assert_ne!(hash, other_hash, "Hash should change when data changes");
 }
