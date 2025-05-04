@@ -21,7 +21,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-bitfield-struct = "0.10"
+bitfield-struct = "0.11"
 ```
 
 ## Basics
