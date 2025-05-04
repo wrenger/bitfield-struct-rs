@@ -636,7 +636,6 @@ fn hash() {
     use std::hash::{Hash, Hasher};
 
     #[bitfield(u32, hash = true)]
-    #[derive(PartialEq, Eq)]
     struct MyBitfield {
         data: u16,
         __: u8,

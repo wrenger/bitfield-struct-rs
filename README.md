@@ -12,7 +12,7 @@ As this library provides a procedural macro, it has no runtime dependencies and 
 - Compile-time checks for type and field sizes
 - Rust-analyzer/docrs friendly (carries over docs to accessor functions)
 - Exports field offsets and sizes as constants (useful for const asserts)
-- Generation of `Default`, `fmt::Debug`, or `defmt::Format` traits
+- Optional generation of `Default`, `Clone`, `Debug`, `Hash`, or `defmt::Format` traits
 - Custom internal representation (endianness)
 
 ## Usage
@@ -435,9 +435,23 @@ struct DefmtExample {
 }
 ```
 
-### Conditionally Enable `new`/`Clone`/`Debug`/`Default`/`defmt::Format`
+### Support for `std::hash::Hash`
 
-Instead of booleans, you can specify `cfg(...)` attributes for `new`, `clone`, `debug`, `default` and `defmt`:
+This macro can also implement `Hash`, which ignores any padding when hashing.
+
+```rust
+use bitfield_struct::bitfield;
+
+#[bitfield(u64, hash = true)]
+struct HashExample {
+    __ignored: u32,
+    data: u32,
+}
+```
+
+### Conditionally Enable `new`/`Clone`/`Debug`/`Default`/`defmt::Format`/`Hash`
+
+Instead of booleans, you can specify `cfg(...)` attributes for `new`, `clone`, `debug`, `default`, `defmt` and `hash`:
 
 ```rust
 use bitfield_struct::bitfield;
