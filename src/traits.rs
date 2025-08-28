@@ -131,3 +131,69 @@ pub fn hash(
         }
     }
 }
+
+/// Implements the `binrw::BinWrite` trait for the given bitfield struct.
+pub fn binwrite(
+    name: &syn::Ident,
+    cfg: Option<TokenStream>,
+) -> TokenStream {
+    let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
+
+    quote! {
+        #attr
+        impl binrw::BinWrite for #name {
+            type Args<'a> = ();
+
+            fn write_options<W: binrw::io::Write + binrw::io::Seek>(
+                &self,
+                writer: &mut W,
+                endian: binrw::Endian,
+                args: Self::Args<'_>,
+            ) -> binrw::BinResult<()> {
+                let raw = self.into_bits();
+
+                let bytes = match endian {
+                    binrw::Endian::Big => raw.to_be_bytes(),
+                    binrw::Endian::Little => raw.to_le_bytes(),
+                };
+
+                writer.write_all(&bytes)?;
+
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Implements the `binrw::BinRead` trait for the given bitfield struct.
+pub fn binread(
+    name: &syn::Ident,
+    repr: &syn::Type,
+    cfg: Option<TokenStream>,
+) -> TokenStream {
+    let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
+
+    quote! {
+        #attr
+        impl binrw::BinRead for #name {
+            type Args<'a> = ();
+
+            fn read_options<R: binrw::io::Read + binrw::io::Seek>(
+                reader: &mut R,
+                endian: binrw::Endian,
+                args: Self::Args<'_>,
+            ) -> binrw::BinResult<Self> {
+                let mut buf = [0u8; core::mem::size_of::<#repr>()];
+
+                reader.read_exact(&mut buf)?;
+
+                let raw = match endian {
+                    binrw::Endian::Big => <#repr>::from_be_bytes(buf),
+                    binrw::Endian::Little => <#repr>::from_le_bytes(buf),
+                };
+
+                Ok(Self::from_bits(raw))
+            }
+        }
+    }
+}

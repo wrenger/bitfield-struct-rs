@@ -15,6 +15,8 @@ pub struct Params {
     pub into: Option<syn::Path>,
     pub from: Option<syn::Path>,
     pub bits: usize,
+    pub binread: Enable,
+    pub binwrite: Enable,
     pub new: Enable,
     pub clone: Enable,
     pub debug: Enable,
@@ -41,6 +43,8 @@ impl Parse for Params {
             into: None,
             from: None,
             bits,
+            binread: Enable::No,
+            binwrite: Enable::No,
             new: Enable::Yes,
             clone: Enable::Yes,
             debug: Enable::Yes,
@@ -92,6 +96,17 @@ impl Parse for Params {
                 }
                 "conversion" => {
                     ret.conversion = syn::LitBool::parse(input)?.value;
+                }
+                "binrw" => {
+                    let enable: Enable = input.parse()?;
+                    ret.binread = enable.clone();
+                    ret.binwrite = enable;
+                }
+                "binread" => {
+                    ret.binread = input.parse()?;
+                }
+                "binwrite" => {
+                    ret.binwrite = input.parse()?;
                 }
                 _ => return Err(s_err(ident.span(), "unknown argument")),
             };
