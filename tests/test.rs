@@ -1,6 +1,6 @@
 use std::fmt;
 
-use bitfield_struct::bitfield;
+use bitfield_struct::{bitenum, bitfield};
 
 #[test]
 fn members() {
@@ -663,4 +663,25 @@ fn hash() {
         .hash(&mut hasher);
     let other_hash = hasher.finish();
     assert_ne!(hash, other_hash, "Hash should change when data changes");
+}
+
+#[test]
+fn bitenum() {
+    #[bitenum(all = true)]
+    #[derive(PartialEq, Eq, Hash, Debug)]
+    #[repr(u8)]
+    enum MyEnum {
+        #[fallback]
+        A = 0,
+        B = 1,
+        C = 2,
+        D = 3,
+    }
+    let e = MyEnum::from_bits(2);
+    assert_eq!(e, MyEnum::C);
+    let e = MyEnum::from_bits(4);
+    assert_eq!(e, MyEnum::A);
+    let bits = MyEnum::B.into_bits();
+    assert_eq!(bits, 1);
+    assert_eq!(MyEnum::all(), [MyEnum::A, MyEnum::B, MyEnum::C, MyEnum::D]);
 }

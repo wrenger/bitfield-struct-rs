@@ -12,8 +12,9 @@ As this library provides a procedural macro, it has no runtime dependencies and 
 - Compile-time checks for type and field sizes
 - Rust-analyzer/docrs friendly (carries over docs to accessor functions)
 - Exports field offsets and sizes as constants (useful for const asserts)
-- Optional generation of `Default`, `Clone`, `Debug`, `Hash`, or `defmt::Format` traits
+- Optional generation of `Default`, `Clone`, `Debug`, `Hash`, `defmt::Format`, or `binrw::(BinRead|BinWrite)` traits
 - Custom internal representation (endianness)
+- Auto-generate enum conversion functions `#[bitenum]`
 
 ## Usage
 
@@ -460,4 +461,26 @@ use bitfield_struct::bitfield;
 struct CustomDebug {
     data: u64
 }
+```
+
+## Auto-Generate Enum `from_bits`/`into_bits`
+
+Enums are very helpful inside bitfields.
+However, manually writing conversion functions is tedious; thus, this crate contains a macro for autogenerating them.
+
+```rust
+use bitfield_struct::bitenum;
+
+#[bitenum]
+#[repr(u8)]
+#[derive(Debug, PartialEq, Eq)]
+enum MyEnum {
+    #[fallback]
+    A = 0,
+    B = 1,
+    C = 2,
+}
+
+assert_eq!(MyEnum::from_bits(1), MyEnum::B);
+assert_eq!(MyEnum::C.into_bits(), 2);
 ```

@@ -7,7 +7,6 @@ use crate::{type_info, TypeClass};
 
 use super::s_err;
 
-
 /// The bitfield macro parameters
 pub struct Params {
     pub ty: syn::Type,
@@ -122,7 +121,6 @@ impl Parse for Params {
         Ok(ret)
     }
 }
-
 
 /// The bits attribute of the fields of a bitfield struct
 pub struct BitsAttr {
@@ -243,5 +241,42 @@ impl Parse for Enable {
                 return Err(s_err(meta.span(), "Only `cfg` attributes are allowed"));
             }
         })
+    }
+}
+
+pub struct EnumParams {
+    pub into: Enable,
+    pub from: Enable,
+    pub all: Enable,
+}
+
+impl Parse for EnumParams {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut ret = EnumParams {
+            into: Enable::Yes,
+            from: Enable::Yes,
+            all: Enable::No,
+        };
+
+        while !input.is_empty() {
+            let ident = syn::Ident::parse(input)?;
+            <Token![=]>::parse(input)?;
+
+            if ident == "from" {
+                ret.from = input.parse()?;
+            } else if ident == "into" {
+                ret.into = input.parse()?;
+            } else if ident == "all" {
+                ret.all = input.parse()?;
+            } else {
+                return Err(s_err(ident.span(), "unknown argument"));
+            }
+
+            if !input.is_empty() {
+                <Token![,]>::parse(input)?;
+            }
+        }
+
+        Ok(ret)
     }
 }
