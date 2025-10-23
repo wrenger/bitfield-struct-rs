@@ -30,6 +30,9 @@ fn s_err(span: proc_macro2::Span, msg: impl fmt::Display) -> syn::Error {
 /// - `from` to specify a conversion function from repr to the bitfield's integer type
 /// - `into` to specify a conversion function from the bitfield's integer type to repr
 /// - `new` to disable the `new` function generation
+/// - `binread` to enable the `BinRead` trait generation
+/// - `binwrite` to enable the `BinWrite` trait generation
+/// - `binrw` to enable both `BinRead` and `BinWrite` trait generation
 /// - `clone` to disable the `Clone` trait generation
 /// - `debug` to disable the `Debug` trait generation
 /// - `defmt` to enable the `defmt::Format` trait generation
@@ -64,6 +67,8 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         into,
         from,
         bits,
+        binread,
+        binwrite,
         new,
         clone,
         debug,
@@ -132,6 +137,12 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     }
     if let Some(cfg) = hash.cfg() {
         impl_debug.extend(traits::hash(&name, &members, cfg));
+    }
+    if let Some(cfg) = binread.cfg() {
+        impl_debug.extend(traits::binread(&name, &repr, cfg));
+    }
+    if let Some(cfg) = binwrite.cfg() {
+        impl_debug.extend(traits::binwrite(&name, cfg));
     }
 
     let defaults = members.iter().map(Member::default).collect::<Vec<_>>();
