@@ -232,6 +232,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         #[allow(unused_comparisons)]
         #[allow(clippy::unnecessary_cast)]
         #[allow(clippy::assign_op_pattern)]
+        #[allow(clippy::double_parens)]
         impl #name {
             #impl_new
 
@@ -243,6 +244,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         #[allow(unused_comparisons)]
         #[allow(clippy::unnecessary_cast)]
         #[allow(clippy::assign_op_pattern)]
+        #[allow(clippy::double_parens)]
         #impl_default
 
         impl From<#repr> for #name {
