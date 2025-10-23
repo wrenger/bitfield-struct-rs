@@ -666,6 +666,34 @@ fn hash() {
 }
 
 #[test]
+fn custom_type_wo() {
+    #[derive(Copy, Clone, Debug)]
+    pub enum BlockState {
+        Nil,
+        Offset,
+    }
+    impl BlockState {
+        const fn from_bits(val: u8) -> Self {
+            match val {
+                0 => Self::Nil,
+                1 => Self::Offset,
+                _ => unreachable!(),
+            }
+        }
+
+        const fn into_bits(self) -> u8 {
+            self as _
+        }
+    }
+    #[bitfield(u64, clone = false, debug = false)]
+    #[derive(Debug, Copy, Clone)]
+    pub struct Block {
+        #[bits(64, access = WO)]
+        pub bstate: BlockState,
+    }
+}
+
+#[test]
 fn bitenum() {
     #[bitenum(all = true)]
     #[derive(PartialEq, Eq, Hash, Debug)]

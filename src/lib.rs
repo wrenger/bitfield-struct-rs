@@ -334,7 +334,7 @@ impl Member {
             let (from, into) = match access {
                 Access::ReadWrite => (from, into),
                 Access::ReadOnly => (from, quote!()),
-                Access::WriteOnly => (quote!(), into),
+                Access::WriteOnly => (from, into),
                 Access::None => (quote!(), quote!()),
             };
 
