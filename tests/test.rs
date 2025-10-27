@@ -713,3 +713,27 @@ fn bitenum() {
     assert_eq!(bits, 1);
     assert_eq!(MyEnum::all(), [MyEnum::A, MyEnum::B, MyEnum::C, MyEnum::D]);
 }
+
+#[allow(unexpected_cfgs)]
+#[test]
+fn bitnum_cfg() {
+    #[bitenum(all = true)]
+    #[derive(PartialEq, Eq, Hash, Debug)]
+    #[repr(u8)]
+    enum MyEnum {
+        #[fallback]
+        A = 0,
+        B = 1,
+        #[cfg(true)]
+        C = 2,
+        #[cfg(feature = "unknown")]
+        D = 3,
+    }
+    let e = MyEnum::from_bits(2);
+    assert_eq!(e, MyEnum::C);
+    let e = MyEnum::from_bits(4);
+    assert_eq!(e, MyEnum::A);
+    let bits = MyEnum::B.into_bits();
+    assert_eq!(bits, 1);
+    assert_eq!(MyEnum::all(), [MyEnum::A, MyEnum::B, MyEnum::C]);
+}
