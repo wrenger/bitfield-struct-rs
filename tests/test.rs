@@ -737,3 +737,63 @@ fn bitnum_cfg() {
     assert_eq!(bits, 1);
     assert_eq!(MyEnum::all(), [MyEnum::A, MyEnum::B, MyEnum::C]);
 }
+
+#[test]
+fn const_generics() {
+    #[bitfield(u64, clone = true, debug = true, defmt = true, hash = true)]
+    #[derive(PartialEq, Eq)]
+    struct MyBitfield<const N: usize> {
+        present: bool,
+        #[bits(15)]
+        first: u16,
+        second: u16,
+        last: u32,
+    }
+
+    impl<const N: usize> MyBitfield<N> {
+        const N: usize = N;
+    }
+
+    let v = MyBitfield::<5>::new()
+        .with_present(true)
+        .with_first(0x1234)
+        .with_second(0x5678)
+        .with_last(0x9abc_def0);
+
+    assert_eq!(v.present(), true);
+    assert_eq!(v.first(), 0x1234);
+    assert_eq!(v.second(), 0x5678);
+    assert_eq!(v.last(), 0x9abc_def0);
+    assert_eq!(MyBitfield::<5>::N, 5);
+}
+
+#[test]
+fn generic_where_clause() {
+    #[bitfield(u16, clone = true, debug = true, hash = true)]
+    #[derive(PartialEq, Eq)]
+    struct MyBitfield<const N: usize>
+    where
+        [u8; N]: Sized,
+    {
+        flag: bool,
+        #[bits(7)]
+        first: u8,
+        second: u8,
+    }
+
+    let v = MyBitfield::<2>::new()
+        .with_flag(true)
+        .with_first(0x12)
+        .with_second(0x34);
+
+    assert_eq!(v.flag(), true);
+    assert_eq!(v.first(), 0x12);
+    assert_eq!(v.second(), 0x34);
+
+    let raw = u16::from(v.clone());
+    let roundtrip = MyBitfield::<2>::from(raw);
+    assert_eq!(roundtrip, v);
+
+    let _ = format!("{:?}", v);
+    let _ = MyBitfield::<2>::default();
+}

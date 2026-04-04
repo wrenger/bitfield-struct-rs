@@ -119,6 +119,20 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
     let span = input.fields.span();
     let name = input.ident;
     let vis = input.vis;
+
+    // We currently only support const generics and where clauses,
+    // typed generics and lifetimes are not supported, as they had to be
+    // used (e.g., by `PhantomData`) in the generated code as well.
+    // This could be added in the future if there is demand for it.
+    if input.generics.type_params().next().is_some() || input.generics.lifetimes().next().is_some()
+    {
+        return Err(s_err(
+            span,
+            "type parameters and lifetimes are not supported",
+        ));
+    }
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
     let attrs: TokenStream = input.attrs.iter().map(ToTokens::to_token_stream).collect();
     let derive = match clone {
         Enable::No => None,
@@ -167,19 +181,19 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
 
     let mut impl_debug = TokenStream::new();
     if let Some(cfg) = debug.cfg() {
-        impl_debug.extend(traits::debug(&name, &members, cfg));
+        impl_debug.extend(traits::debug(&name, &input.generics, &members, cfg));
     }
     if let Some(cfg) = defmt.cfg() {
-        impl_debug.extend(traits::defmt(&name, &members, cfg));
+        impl_debug.extend(traits::defmt(&name, &input.generics, &members, cfg));
     }
     if let Some(cfg) = hash.cfg() {
-        impl_debug.extend(traits::hash(&name, &members, cfg));
+        impl_debug.extend(traits::hash(&name, &input.generics, &members, cfg));
     }
     if let Some(cfg) = binread.cfg() {
-        impl_debug.extend(traits::binread(&name, &repr, cfg));
+        impl_debug.extend(traits::binread(&name, &input.generics, &repr, cfg));
     }
     if let Some(cfg) = binwrite.cfg() {
-        impl_debug.extend(traits::binwrite(&name, cfg));
+        impl_debug.extend(traits::binwrite(&name, &input.generics, cfg));
     }
 
     let defaults = members.iter().map(Member::default).collect::<Vec<_>>();
@@ -201,7 +215,7 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
         quote! {
             #attr
-            impl Default for #name {
+            impl #impl_generics Default for #name #ty_generics #where_clause {
                 fn default() -> Self {
                     let mut this = Self(#from(0));
                     #( #defaults )*
@@ -228,13 +242,13 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         #attrs
         #derive
         #[repr(transparent)]
-        #vis struct #name(#repr);
+        #vis struct #name #impl_generics (#repr) #where_clause;
 
         #[allow(unused_comparisons)]
         #[allow(clippy::unnecessary_cast)]
         #[allow(clippy::assign_op_pattern)]
         #[allow(clippy::double_parens)]
-        impl #name {
+        impl #impl_generics #name #ty_generics #where_clause {
             #impl_new
 
             #conversion
@@ -248,13 +262,13 @@ fn bitfield_inner(args: TokenStream, input: TokenStream) -> syn::Result<TokenStr
         #[allow(clippy::double_parens)]
         #impl_default
 
-        impl From<#repr> for #name {
+        impl #impl_generics From<#repr> for #name #ty_generics #where_clause {
             fn from(v: #repr) -> Self {
                 Self(v)
             }
         }
-        impl From<#name> for #repr {
-            fn from(v: #name) -> #repr {
+        impl #impl_generics From<#name #ty_generics> for #repr #where_clause {
+            fn from(v: #name #ty_generics) -> Self {
                 v.0
             }
         }

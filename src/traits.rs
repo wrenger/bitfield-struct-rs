@@ -5,6 +5,7 @@ use quote::quote;
 /// Implements the `core::clone::Clone` trait for the given bitfield struct.
 pub fn debug(
     name: &syn::Ident,
+    generics: &syn::Generics,
     members: &[Member],
     cfg: Option<TokenStream>,
 ) -> TokenStream {
@@ -20,9 +21,10 @@ pub fn debug(
 
     let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
 
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
         #attr
-        impl core::fmt::Debug for #name {
+        impl #impl_generics core::fmt::Debug for #name #ty_generics #where_clause {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.debug_struct(stringify!(#name))
                     #( #fields )*
@@ -35,6 +37,7 @@ pub fn debug(
 /// Implements the `core::fmt::Display` trait for the given bitfield struct.
 pub fn defmt(
     name: &syn::Ident,
+    generics: &syn::Generics,
     members: &[Member],
     cfg: Option<TokenStream>,
 ) -> TokenStream {
@@ -94,9 +97,11 @@ pub fn defmt(
     //
     // defmt itself avoids ::defmt for this reason. For more info, see:
     // https://github.com/knurling-rs/defmt/pull/835
+
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
         #attr
-        impl defmt::Format for #name {
+        impl #impl_generics defmt::Format for #name #ty_generics #where_clause {
             fn format(&self, f: defmt::Formatter) {
                 defmt::write!(f, #format_string, #( #args, )*)
             }
@@ -107,6 +112,7 @@ pub fn defmt(
 /// Implements the `core::hash::Hash` trait for the given bitfield struct.
 pub fn hash(
     name: &syn::Ident,
+    generics: &syn::Generics,
     members: &[Member],
     cfg: Option<TokenStream>,
 ) -> TokenStream {
@@ -122,9 +128,10 @@ pub fn hash(
 
     let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
 
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
         #attr
-        impl core::hash::Hash for #name {
+        impl #impl_generics core::hash::Hash for #name #ty_generics #where_clause {
             fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
                 #( #fields.hash(state); )*
             }
@@ -135,13 +142,15 @@ pub fn hash(
 /// Implements the `binrw::BinWrite` trait for the given bitfield struct.
 pub fn binwrite(
     name: &syn::Ident,
+    generics: &syn::Generics,
     cfg: Option<TokenStream>,
 ) -> TokenStream {
     let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
 
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
         #attr
-        impl binrw::BinWrite for #name {
+        impl #impl_generics binrw::BinWrite for #name #ty_generics #where_clause {
             type Args<'a> = ();
 
             fn write_options<W: binrw::io::Write + binrw::io::Seek>(
@@ -168,14 +177,16 @@ pub fn binwrite(
 /// Implements the `binrw::BinRead` trait for the given bitfield struct.
 pub fn binread(
     name: &syn::Ident,
+    generics: &syn::Generics,
     repr: &syn::Type,
     cfg: Option<TokenStream>,
 ) -> TokenStream {
     let attr = cfg.map(|cfg| quote!(#[cfg(#cfg)]));
 
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
         #attr
-        impl binrw::BinRead for #name {
+        impl #impl_generics binrw::BinRead for #name #ty_generics #where_clause {
             type Args<'a> = ();
 
             fn read_options<R: binrw::io::Read + binrw::io::Seek>(
