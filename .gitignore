@@ -1,2 +1,4 @@
-/target
-.vscode
+/target/
+/.direnv/
+/.vscode/
+/.zed/
